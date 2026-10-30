@@ -1,24 +1,29 @@
-# Estado de implementación y auditoría
+# Estado de implementación — 2026-10-30
 
-Fecha de referencia: 2026-10-30. No confundir pruebas simuladas con resultados de producción.
+## Integrado en desarrollo
 
-| Área | Estado |
-| --- | --- |
-| Carpeta local y 80 pruebas Node | Verificado en una copia entregada por Antigravity |
-| Base maestra: 239 puntos de entrada | Catálogo preparado; accesibilidad variable |
-| Google Apps Script / Sheets / Gmail | Prototipo; no desplegado desde este repositorio |
-| Deduplicación de Tusclases | Pruebas de regresión; requiere piloto real |
-| YouTube | Conector y límites en prototipo; requiere verificar videos y permisos |
-| Gemini | **Bloqueado:** configuración local usa modelo 2.0 Flash-Lite, retirado en junio 2026 |
-| Integración de decisiones Gemini | Requiere verificar que afecten clasificación y alertas, no solo estado de cola |
-| Contactabilidad + precio internacional + perfiles docentes | Existe prototipo separado; pendiente de integración |
-| Datos reales, tokens y secretos | No deben publicarse |
-| Contacto automático | Deshabilitado y fuera del alcance inicial |
+- Google Apps Script / Gmail / Sheets / RSS / YouTube.
+- Catálogo de 239 puntos de entrada, **todos desactivados salvo activación manual**.
+- Gemini 3.5 Flash-Lite, cola persistente y aprobación semántica conectada al flujo de oportunidades.
+- Contactabilidad multired, equivalentes ARS/USD solo con cotización vigente y perfiles docentes opcionales.
+- Sistema desactivado por defecto. No hay mensajes automáticos a estudiantes.
+- **90/90 pruebas locales simuladas aprobadas.**
 
-## Criterios de salida
-- API Gemini vigente y límites del plan comprobados.
-- Resultados de Gemini conectados al filtrado de oportunidades con pruebas end-to-end.
-- Una sola versión integrada de los cambios, sin regresiones.
-- Casos reales de duplicación, falsos positivos y notificaciones aprobados.
-- Sistema apagado por defecto; habilitación explícita y reversible.
-- Revisión final de privacidad, licencias y secretos antes de convertirlo en público.
+## Limitaciones conocidas
+
+- No se verificaron aún las credenciales, cuotas reales ni disponibilidad individual de las fuentes activables.
+- Instagram, TikTok, Facebook y otras plataformas restringidas **no** tienen conectores automáticos funcionales en esta versión.
+- La migración de una planilla existente requiere ensayo previo con una copia de los registros reales.
+- Las pruebas del conector YouTube se basan en respuestas simuladas; los IDs y comentarios requieren validación en vivo.
+- Faltan URL reales de perfiles docentes y verificar condiciones de publicación de las plataformas.
+- Antes de un despliegue, validar privacidad, tratamiento de datos de menores, reintentos, cuotas y supervisión.
+
+## Próxima etapa
+
+1. Revisar GitHub Actions.
+2. Probar permisos y cuotas de la API Gemini.
+3. Validar el conector YouTube con un video y sin publicar respuestas.
+4. Ensayar la migración de Sheets sin alterar el original.
+5. Piloto corto con revisión manual de los resultados.
+
+**No desplegar en producción todavía.**
