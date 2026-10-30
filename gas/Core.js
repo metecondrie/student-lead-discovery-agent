@@ -12,6 +12,13 @@ var DEFAULT_CONFIG = {
   NOMBRE: 'Alejo',
   ANIO_INICIO: 2010,
   TARIFA: 12000,
+  MOSTRAR_PERFILES_DOCENTES: true,
+  PERFIL_TUSCLASES_URL: '',
+  PERFIL_SUPERPROF_URL: '',
+  MOSTRAR_EQUIVALENTE_USD: true,
+  USD_AUTO_ACTUALIZAR: true,
+  USD_ARS_VENTA: 0,
+  USD_FECHA_COTIZACION: '',
   HORARIOS: 'de lunes a viernes de 9 a 21 h y sábados por la mañana',
   EMAIL_NOTIF: '',
   MAX_ANTIGUEDAD_DIAS: 10,
@@ -29,7 +36,7 @@ var DEFAULT_CONFIG = {
   YOUTUBE_MAX_COMMENTS_PER_VIDEO: 50,
   YOUTUBE_MAX_DAILY_QUOTA: 100,
   GEMINI_ACTIVO: false,
-  GEMINI_MODEL: 'gemini-2.0-flash-lite',
+  GEMINI_MODEL: 'gemini-3.5-flash-lite',
   GEMINI_MAX_DAILY_CALLS: 20,
   GEMINI_BATCH_SIZE: 5,
   MODO_B_ACTIVO: false,
@@ -649,6 +656,48 @@ function contactKeys(name, materia, url) {
 
 /* ---------- Evaluación y puntuación ---------- */
 /** index: {ids:{}, keys:{}}; contacted: {key:true}. Devuelve registro completo. */
+/**
+ * Contactabilidad multifuente. Un enlace a una publicación NO equivale a un medio
+ * privado para escribir al autor. Ninguna vía habilita envíos automáticos.
+ * El resultado es una recomendación de revisión, no una autorización de contacto.
+ */
+function assessContactability(it, directInquiry) {
+  var platform = norm((it.sourceKey || it.source || it.sourceLabel || '') + ' ' + (it.platform || ''));
+  var text = norm(it.text || '');
+  var url = String(it.url || '');
+  var social = /youtube|tiktok|instagram|facebook|reddit|telegram|discord|twitter|\bx\b|foro|utnianos/.test(platform);
+  var addressedToCreator = /(?:^|\n|[.!?]\s*)(?:hola[,! ]*)?(?:profe|profesor|profesora|maestro|maestra)[,! ]+(?:vos|tu|usted|das|dictas|cobras|haces|ensenas|podrias)/.test(text) ||
+    /(?:\b(?:vos|tu|usted)\s+)?(?:das|dictas|cobras)\s+clases\s+particulares/.test(text) ||
+    /(?:cuanto|que)\s+cobras\s+(?:por\s+)?(?:la\s+)?clase/.test(text);
+  var openRequest = /(?:\bbusco\s+(?:un[a]?\s+)?(?:profe|profesor|profesora|docente|tutor)|\bnecesito\s+(?:un[a]?\s+)?(?:profe|profesor|profesora|docente|tutor)|\balguien\s+(?:conoce|recomienda|da|que\s+de)|\bconocen\s+(?:un[a]?\s+)?(?:profe|profesor)|\brecomiendan\s+(?:un[a]?\s+)?(?:profe|profesor)|\balgun\s+(?:profe|profesor)\b)/.test(text);
+  if (directInquiry) return { label: 'Contacto en plataforma', via: 'Responder a consulta entrante en plataforma', action: 'Revisar mensaje recibido y responder manualmente', notify: true, reachable: true };
+  if (!url) return { label: 'Sin vía de contacto', via: '', action: 'Sin enlace verificable; no enviar oferta', notify: false, reachable: false };
+  if (social) {
+    if (addressedToCreator) return { label: 'Dirigido al creador', via: 'Comentario público', action: 'No intervenir comercialmente en la consulta dirigida a otro docente', notify: false, reachable: false };
+    if (!openRequest) return { label: 'Sin solicitud abierta', via: 'Publicación o comentario público', action: 'No contactar; no expresó búsqueda abierta de docente', notify: false, reachable: false };
+    if (/youtube|utnianos|foro/.test(platform)) return { label: 'Respuesta pública posible', via: 'Respuesta pública al comentario/hilo', action: 'Verificar normas, pertinencia y que admita respuestas; intervención manual', notify: true, reachable: true };
+    return { label: 'Revisar canal y permisos', via: 'Respuesta pública sin verificar', action: 'Comprobar acceso y normas del grupo/plataforma; no enviar DM automático', notify: false, reachable: false };
+  }
+  if (/tusclases|superprof|classgap/.test(platform) || /tusclases\.com|superprof\.|classgap\./.test(url)) {
+    return { label: 'Contacto en plataforma', via: 'Anuncio o mensajería del portal', action: 'Comprobar vigencia y contactar manualmente dentro de la plataforma', notify: true, reachable: true };
+  }
+  return { label: 'Revisar canal y permisos', via: 'Enlace a publicación, no a contacto directo', action: 'Comprobar si admite propuestas antes de escribir', notify: false, reachable: false };
+}
+
+/** Convierte una tarifa ARS a referencia USD; no fija el medio de pago ni tipo efectivo. */
+function usdReference(cfg, now) {
+  cfg = cfg || DEFAULT_CONFIG;
+  if (!cfg.MOSTRAR_EQUIVALENTE_USD) return '';
+  var rate = Number(cfg.USD_ARS_VENTA), date = new Date(cfg.USD_FECHA_COTIZACION || '');
+  var time = new Date(now || new Date()).getTime();
+  if (!Number.isFinite(rate) || rate < 100 || rate > 100000 || isNaN(date.getTime())) return '';
+  var hours = (time - date.getTime()) / 3600000;
+  if (hours < -1 || hours > 96) return ''; // permite feriados y fines de semana, sin cotización vencida
+  var amount = Number(cfg.TARIFA) / rate;
+  if (!Number.isFinite(amount) || amount <= 0) return '';
+  return ' (aprox. USD ' + amount.toFixed(2).replace('.', ',') + ' al dólar oficial vendedor de referencia; sujeto a cotización y medio de pago)';
+}
+
 function evaluate(it, cfg, now, index, contacted) {
   cfg = cfg || DEFAULT_CONFIG; index = index || {}; index.ids = index.ids || {}; index.keys = index.keys || {}; contacted = contacted || {};
   var W = cfg.PESOS || DEFAULT_CONFIG.PESOS, n = norm(it.text), reasons = [], discard = '';
@@ -665,7 +714,7 @@ function evaluate(it, cfg, now, index, contacted) {
     gmailLink: it.gmailLink || '', threadId: it.threadId || '', title: it.title || '', studentName: it.studentName || '',
     subject: subj ? subj.label : '', subjectKey: subj ? subj.key : '', level: level ? level.label : '', levelKey: level ? level.key : '',
     need: need, publishedAt: it.publishedAt || '', detectedAt: now, modality: modality, minor: !!minor, parent: RX.parent.test(n),
-    compatible: '', score: 0, reasons: '', status: 'Evaluado', message: '', dedupKey: '' };
+    compatible: '', score: 0, reasons: '', status: 'Evaluado', message: '', dedupKey: '', contactability: '', contactChannel: '', contactAction: '' };
   rec.dedupKey = dedupKey(it, subj);
 
   // Diferenciación de origen: Inbound perfil docente vs Descubrimiento proactivo
@@ -681,6 +730,10 @@ function evaluate(it, cfg, now, index, contacted) {
     it.sourceKey === 'inbound' ||
     /interesad|solicitud de clase|te ha enviado una solicitud|consulta entrante|mensaje de/i.test(it.title + ' ' + (it.text || '').slice(0, 300))
   );
+
+  var reach = assessContactability(it, isDirectInquiry);
+  rec.contactability = reach.label; rec.contactChannel = reach.via; rec.contactAction = reach.action;
+  reasons.push('[Contactabilidad: ' + reach.label + ']');
 
   if (isDirectInquiry) {
     reasons.push('[Origen: Inbound perfil docente]');
@@ -711,7 +764,7 @@ function evaluate(it, cfg, now, index, contacted) {
   else if (index.keys[rec.dedupKey]) discard = 'duplicado (misma solicitud ya registrada)';
   else if (isContacted) discard = 'ya contactado previamente';
   else if (RX.fraud.test(n)) discard = 'señales de fraude';
-  else if (isYouTube && !YT_INTENT_RX.test(n)) discard = 'comentario educativo sin intención de contratación (consulta gratuita o agradecimiento)';
+  else if (isYouTube && !YT_INTENT_RX.test(n) && !reach.reachable) discard = 'comentario educativo sin intención de contratación (consulta gratuita o agradecimiento)';
   else if (isYouTube && YT_FREE_EXCLUDE_RX.test(n) && !YT_INTENT_RX.test(n)) discard = 'consulta técnica puntual del video o agradecimiento (gratuita)';
   else if (isProactiveDiscovery && it.kind === 'tutoring' && RX.teacherOffer.test(n)) discard = 'aviso de otro docente (ofrece clases)';
   else if (isProactiveDiscovery && it.kind === 'tutoring' && RX.formalJobOffer.test(n)) discard = 'oferta institucional/concurso docente';
@@ -751,7 +804,7 @@ function evaluate(it, cfg, now, index, contacted) {
   var clar = (subj ? 1 : 0) + (level ? 1 : 0) + (need ? 1 : 0);
   pts.claridad = Math.round(W.claridad * clar / 3); reasons.push('claridad ' + pts.claridad);
   if (isDirectInquiry && (it.text || '').length < 350) reasons.push('revisar mensaje en plataforma');
-  pts.contacto = (it.url || it.gmailLink) ? W.contacto : 0;
+  pts.contacto = reach.reachable ? W.contacto : 0;
   pts.cobro = it.kind === 'tutoring' ? W.cobro : Math.round(W.cobro * 0.2);
   var total = 0; for (var k in pts) total += pts[k];
   rec.score = Math.max(0, Math.min(100, total));
@@ -774,6 +827,11 @@ function evaluate(it, cfg, now, index, contacted) {
     rec.status = 'Evaluado';
     return rec;
   }
+  if (it.kind === 'tutoring' && !reach.reachable) {
+    rec.status = 'Evaluado';
+    rec.compatible = 'Revisar';
+    return rec;
+  }
   rec.message = sanitizeForSheets(it.kind === 'job' ? composeJobMessage(rec, cfg) : composeMessage(rec, cfg));
   rec.status = 'Pendiente de aprobación';
   return rec;
@@ -782,6 +840,29 @@ function evaluate(it, cfg, now, index, contacted) {
 /* ---------- Redacción ---------- */
 function pick(arr, seed, salt) { return arr[(hashInt(seed + '#' + salt)) % arr.length]; }
 var LEVEL_TXT = { cbc: ' del CBC', ubaxxi: ' de UBA XXI', ingreso: ' para el ingreso', universitario: ' de la facultad', terciario: ' del terciario', secundario: ' del secundario', primario: ' de primaria' };
+
+/** Enlaces de acreditación profesional (sólo URLs HTTPS específicas y configuradas). */
+function validTeachingProfileUrl(raw, domain) {
+  var url = String(raw || '').trim();
+  if (!/^https:\/\//i.test(url) || /[\s<>\\]/.test(url)) return '';
+  var match = /^https:\/\/([^/:?#]+)(?::443)?(\/[^?#]*)?(?:[?#].*)?$/i.exec(url);
+  if (!match) return '';
+  var host = match[1].toLowerCase().replace(/^www\./, '');
+  if (host !== domain) return '';
+  var path = match[2] || '/';
+  if (path === '/' || /^\/(?:login|signin|registro|registrarse|search|buscar|alumnos|dashboard|area-profesores|mensajes|inbox|ayuda|contacto|dar-clases-particulares)(?:\/|\.|$)/i.test(path)) return '';
+  return 'https://www.' + domain + path;
+}
+function teachingProfileReferences(cfg) {
+  cfg = cfg || DEFAULT_CONFIG;
+  if (!cfg.MOSTRAR_PERFILES_DOCENTES) return '';
+  var tus = validTeachingProfileUrl(cfg.PERFIL_TUSCLASES_URL, 'tusclases.com.ar');
+  var sup = validTeachingProfileUrl(cfg.PERFIL_SUPERPROF_URL, 'superprof.com.ar');
+  var refs = [];
+  if (tus) refs.push('Tusclases: ' + tus);
+  if (sup) refs.push('Superprof: ' + sup);
+  return refs.length ? 'Si querés conocer mi perfil docente antes de coordinar, podés consultarlo acá:\n' + refs.join('\n') : '';
+}
 
 function composeMessage(r, cfg) {
   cfg = cfg || DEFAULT_CONFIG;
@@ -811,12 +892,17 @@ function composeMessage(r, cfg) {
   var mod = pick(['Las clases son individuales y online por videollamada; el valor es de ARS ' + fmtMoney(cfg.TARIFA) + ' por hora.',
     'Trabajo online por videollamada, en clases individuales de ARS ' + fmtMoney(cfg.TARIFA) + ' la hora.',
     'Doy clases individuales por videollamada, a ARS ' + fmtMoney(cfg.TARIFA) + ' la hora.'], s, 'm');
+  var usd = usdReference(cfg, new Date());
+  mod = mod.replace(/(ARS [\d.]+)(?= (?:por hora|la hora))/, function (m) { return m + usd; });
   var minor = (r.minor && !r.parent) ? 'Si sos menor de edad, coordino horarios y pago con tu mamá, papá o adulto responsable.' : '';
   var q = pick(['¿Seguís buscando profesor?', '¿Todavía estás buscando profe?', '¿Seguís necesitando las clases?'], s, 'q');
   var cta = pick(['Si te sirve, tengo disponibilidad ' + cfg.HORARIOS + '; decime qué día te queda cómodo y reservamos la primera clase.',
     'Si querés, coordinamos una primera clase esta semana: tengo lugar ' + cfg.HORARIOS + '. ¿Qué día y horario te viene bien?',
     'Podemos agendar una primera clase: tengo horarios ' + cfg.HORARIOS + '. Contame qué te queda mejor y lo reservamos.'], s, 'c');
-  return [g, need + ' ' + exp + (adapt ? ' ' + adapt : ''), mod + (minor ? ' ' + minor : ''), q + ' ' + cta, 'Saludos,\n' + cfg.NOMBRE]
+  var profiles = teachingProfileReferences(cfg);
+  return [g, need + ' ' + exp + (adapt ? ' ' + adapt : ''), mod + (minor ? ' ' + minor : ''), q + ' ' + cta]
+    .concat(profiles ? [profiles] : [])
+    .concat(['Saludos,\n' + cfg.NOMBRE])
     .join('\n\n').replace(/ {2,}/g, ' ');
 }
 
@@ -948,7 +1034,7 @@ function parseGeminiResponse(rawText) {
       if (obj && typeof obj === 'object' && obj.id) {
         validated.push({
           id: String(obj.id),
-          es_solicitud_clases: Boolean(obj.es_solicitud_clases),
+          es_solicitud_clases: obj.es_solicitud_clases === true,
           materia: String(obj.materia || ''),
           nivel: String(obj.nivel || ''),
           urgencia: String(obj.urgencia || 'ninguna'),
@@ -973,5 +1059,6 @@ if (typeof module !== 'undefined') module.exports = {
   detectNeed: detectNeed, extractName: extractName, extractLinks: extractLinks, extractFromEmail: extractFromEmail, parseGetOnBoard: parseGetOnBoard,
   parseRemotive: parseRemotive, parseRss: parseRss, makeId: makeId, dedupKey: dedupKey, contactKeys: contactKeys, evaluate: evaluate, composeMessage: composeMessage,
   composeJobMessage: composeJobMessage, analyzeInbound: analyzeInbound, autoSendAllowed: autoSendAllowed, buildDigest: buildDigest, fmtMoney: fmtMoney,
+  assessContactability: assessContactability, usdReference: usdReference, validTeachingProfileUrl: validTeachingProfileUrl, teachingProfileReferences: teachingProfileReferences,
   isLocationIncompatible: isLocationIncompatible
 };
