@@ -1,0 +1,25 @@
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+.clasp.json
+*.key
+*.pem
+*credentials*.json
+*secrets*.json
+*.token
+# Real operational data
+data/private/
+data/real/
+exports/
+backups/
+*alumnos*.csv
+*contactados*.csv
+# Tool and test artifacts
+node_modules/
+coverage/
+.nyc_output/
+__pycache__/
+*.pyc
+.DS_Store
+Thumbs.db
