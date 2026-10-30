@@ -1,37 +1,49 @@
 # Student Lead Discovery Agent
 
-**Estado: prototipo en auditoría. Repositorio privado. Código todavía no publicado.**
+**Prototipo en auditoría; no desplegado.** Sistema de descubrimiento de solicitudes de clases particulares con supervisión humana, desarrollado con Google Apps Script, Gmail, Sheets, YouTube Data API y Gemini.
 
-Sistema de descubrimiento y evaluación de solicitudes públicas de clases particulares, pensado para operar con intervención humana. El diseño utiliza Google Apps Script, Gmail, Google Sheets, conectores autorizados para fuentes públicas y clasificación semántica mediante Gemini Flash-Lite.
-
-> **Sin contacto automático a alumnos:** los rastreadores observan fuentes permitidas y generan alertas privadas; una persona revisa cada oportunidad y decide si corresponde responder.
-
-## Objetivo
-Reducir el trabajo manual de encontrar solicitudes explícitas de clases de Matemática, Física, Química y Biología, desde secundaria hasta universidad, sin enviar spam ni recolectar datos innecesarios.
-
-## Arquitectura prevista
+## Arquitectura
 
 ```mermaid
 flowchart TD
-  A[Fuentes autorizadas: correo, RSS, YouTube] --> B[Normalización y deduplicación]
-  B --> C[Cola de clasificación]
-  C --> D[Gemini Flash-Lite + reglas de seguridad]
-  D --> E[Contactabilidad y revisión humana]
-  E --> F[Google Sheets]
-  F --> G[Alertas privadas Gmail]
+  A[Gmail / RSS / YouTube] --> B[Normalización y deduplicación]
+  B --> C[Cola persistente Gemini Flash-Lite]
+  C --> D{Solicita clases y hay vía de contacto?}
+  D -->|Sí| E[Google Sheets: oportunidades]
+  D -->|No| F[Descartar o revisar]
+  E --> G[Notificación privada al profesor]
+  G --> H[Revisión y contacto manual]
 ```
 
-## Estado real del desarrollo
-- Hay una versión local entregada por Antigravity con 80 pruebas unitarias aprobadas.
-- El catálogo de investigación reúne 239 puntos de entrada; **no** equivale a 239 rastreadores activos.
-- La integración de Gemini aún necesita corregir su versión del modelo y verificar que sus decisiones afecten al registro de oportunidades.
-- Falta integrar y probar en conjunto contactabilidad multired, precios orientativos ARS/USD y perfiles docentes.
-- No se ha verificado un despliegue de producción. No hay mensajes automáticos a terceros.
+## Implementado en esta rama
 
-Ver [arquitectura](docs/ARCHITECTURE.md), [estado y pendientes](docs/STATUS.md) y [seguridad](SECURITY.md).
+- Extracción de avisos de Tusclases y alertas de Gmail; deduplicación de enlaces de seguimiento.
+- Filtros de avisos administrativos de Superprof y ruido de foros.
+- Conector YouTube basado en su API oficial, con límites locales de consulta.
+- Catálogo de **239 fuentes candidatas, desactivadas**; no equivale a 239 rastreadores operativos.
+- Clasificador `gemini-3.5-flash-lite` con cola persistente, límites configurables y conexión con el alta de oportunidades.
+- Evaluación de contactabilidad en YouTube, Instagram, TikTok y otras fuentes. No hay conectores automáticos para todas esas redes.
+- Mensajes sugeridos con precios ARS, equivalentes USD orientativos (si hay cotización vigente) y referencias opcionales a perfiles docentes.
+- Sin envío automático a alumnos y con interruptor de sistema apagado por defecto.
 
-## English summary
-Human-in-the-loop tutoring lead discovery and qualification prototype. Designed for authorized public sources, semantic intent classification, persistent deduplication, cost limits, privacy-aware contactability, Google Sheets review, and owner-only Gmail notifications. **Development in progress; not production-ready.**
+## Pruebas
 
-## Publicación futura
-Este repositorio permanecerá privado mientras se revisan código, permisos, credenciales, datos personales y pruebas de extremo a extremo. Las capturas de demostración utilizarán datos sintéticos.
+```bash
+npm test
+```
+
+**90 pruebas locales aprobadas** (sin conexión real a Google ni entrega de mensajes). GitHub Actions ejecuta la suite al actualizar esta rama.
+
+## Seguridad
+
+Las claves se guardan en Script Properties, nunca en GitHub ni en celdas accesibles. Para activar cualquier conexión se requiere configuración personal y evaluación de los términos de cada fuente. **No ejecutar `instalar()` directamente en la cuenta operativa sin probar primero sobre una copia**.
+
+## Estado
+
+La rama `develop/antigravity-2026-10-30` es una versión candidata. Falta confirmar las APIs reales, probar la migración de datos en Sheets y validar resultados en piloto antes de publicarla como portfolio.
+
+Ver [detalles de integración](docs/INTEGRATION.md), [seguridad](SECURITY.md) y [pendientes](docs/STATUS.md).
+
+### English summary
+
+Human-in-the-loop tutoring lead discovery prototype using Google Apps Script, Gemini, YouTube Data API, Gmail and Sheets. Uses authorized data sources, persistent deduplication, semantic intent classification, contactability assessment and owner-only alerts. Development build; not production-ready.
