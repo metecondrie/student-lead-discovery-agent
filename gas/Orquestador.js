@@ -20,7 +20,8 @@ var ORQ_HEADERS = {
   'OrqCorridas': ['Run ID', 'Inicio', 'Fin', 'Estado', 'Fuentes totales', 'Fuentes completas', 'Comentarios/Avisos leidos', 'Repetidos', 'Clasificados', 'Solicitudes', 'Candidatos', 'Errores', 'Llamadas YouTube', 'Llamadas Gemini', 'Duración segundos'],
   'OrqFuentes': ['Run ID', 'Fecha', 'Fuente ID', 'Nombre', 'Conector', 'Estado', 'Leidos', 'Repetidos', 'Clasificados', 'Solicitudes', 'Candidatos', 'Errores', 'YouTube API', 'Gemini API', 'Duracion s', 'Mensaje'],
   'OrqHallazgos': ['Run ID', 'Detectado', 'Plataforma', 'Fuente', 'Identificador', 'URL', 'Publicado', 'Texto público protegido', 'Busca clases', 'Destinatario', 'Contactabilidad', 'Candidato para revision', 'Materia', 'Nivel', 'Confianza', 'Resumen'],
-  'OrqCola': ['Run ID', 'Job ID', 'Fuente ID', 'Plataforma', 'Conector', 'Estado', 'Intentos', 'Cursor', 'Error', 'Creado', 'Actualizado']
+  'OrqCola': ['Run ID', 'Job ID', 'Fuente ID', 'Plataforma', 'Conector', 'Estado', 'Intentos', 'Cursor', 'Error', 'Creado', 'Actualizado'],
+  'OrqAuditoria': ['Run ID', 'Fecha', 'Fuente ID', 'Fuente', 'Plataforma', 'Item ID', 'URL', 'Título', 'Fecha publicación', 'Decisión', 'Motivo']
 };
 
 /** Entrada Web App privada: centro de control */
@@ -68,6 +69,27 @@ function orqSafeText_(text) {
   return typeof sanitizeForSheets === 'function' ? sanitizeForSheets(clean) : clean;
 }
 
+/**
+ * Auditoría sin texto íntegro: permite distinguir sin coincidencias, sin fecha,
+ * fuera de ventana, repetidos y elementos efectivamente enviados al clasificador.
+ * Solo se almacena título reducido de publicaciones públicas (sin email ni teléfono).
+ */
+function orqAuditRows_(ss, entries) {
+  if (!entries || !entries.length) return;
+  var sh = orqSheet_(ss, 'OrqAuditoria');
+  sh.getRange(sh.getLastRow() + 1, 1, entries.length, 11).setValues(entries);
+}
+function orqAuditEntry_(run, source, platform, item, key, decision, reason) {
+  var date = item.publishedAt || item.date || '';
+  var stamp = '';
+  if (date) {
+    var d = new Date(date);
+    if (!isNaN(d.getTime())) stamp = d.toISOString();
+  }
+  return [run.id, new Date(), source.id, source.name, platform, String(key || ''),
+    String(item.url || '').slice(0, 350), orqSafeText_(item.title || '').slice(0, 160),
+    stamp, decision, reason];
+}
 function orqHash_(str) {
   var s = String(str || ''), hash = 0;
   for (var i = 0; i < s.length; i++) {
@@ -675,7 +697,7 @@ function orqExecuteYouTube_(ss, run, source) {
 
   // Resolver canal usando YouTubeCanales.js
   var fetchFn = function(url, opts) { return UrlFetchApp.fetch(url, opts || { muteHttpExceptions: true }); };
-  var comments = [];
+  var comments = [], stream = null;
   var resolved = null;
   if (typeof ytChannelResolve === 'function') {
     try {
@@ -709,6 +731,18 @@ function orqExecuteYouTube_(ss, run, source) {
     return res;
   }
   res.leidos = comments.length;
+  // La API puede devolver una página con comentarios anteriores a la ventana.
+  // Registrar descartes agregados, sin almacenar comentarios antiguos.
+  if (stream && (stream.skippedOld || stream.skippedNoDate)) {
+    var yy = [];
+    if (stream.skippedOld) yy.push(orqAuditEntry_(run, source, 'YouTube',
+      {title:'Comentarios antiguos omitidos'}, 'CANAL:'+resolved.channelId,
+      'DESCARTADO', 'FUERA_DE_VENTANA_14_DIAS: '+stream.skippedOld));
+    if (stream.skippedNoDate) yy.push(orqAuditEntry_(run, source, 'YouTube',
+      {title:'Comentarios sin fecha omitidos'}, 'CANAL:'+resolved.channelId,
+      'DESCARTADO', 'FECHA_DESCONOCIDA: '+stream.skippedNoDate));
+    orqAuditRows_(ss, yy);
+  }
 
   if (!comments.length) {
     res.estado = 'SIN_COMENTARIOS_RECIENTES';
@@ -825,24 +859,35 @@ function orqExecuteRss_(ss, run, source) {
     return res;
   }
 
-  // Filtrar publicaciones recientes (14 días) y con palabras clave de estudio/clases
+  // Auditar CADA item consultado, incluso si el filtro lo descarta.
+  // La fecha pertenece a la publicación; no inferir que un item sin fecha es reciente.
   var now = Date.now(), windowMs = 14 * 86400000;
-  var relevant = items.filter(function(it) {
-    var rawDate = it.publishedAt || it.date;
-    var at = rawDate ? new Date(rawDate).getTime() : now;
-    if (now - at > windowMs) return false;
-    var txt = ((it.title || '') + ' ' + (it.text || '')).toLowerCase();
-    return /clases|profesor|particular|parcial|final|ayuda|quimica|fisica|matematica|algebra|analisis/i.test(txt);
-  });
-
-  var known = orqSeen_(ss);
-  var unclassified = [];
-  relevant.forEach(function(it) {
-    var id = 'RSS-' + orqHash_(it.url || it.title);
+  var known = orqSeen_(ss), unclassified = [], audit = [];
+  items.forEach(function(it) {
+    var id = 'RSS-' + orqHash_(it.url || it.title || it.text);
     it.computedId = id;
-    if (known[id]) res.repetidos++;
-    else unclassified.push(it);
+    var rawDate = it.publishedAt || it.date;
+    var at = rawDate ? new Date(rawDate).getTime() : NaN;
+    var txt = ((it.title || '') + ' ' + (it.text || '')).toLowerCase()
+      .normalize('NFD').replace(/[\\u0300-\\u036f]/g, '');
+    var reason = '';
+    if (!isFinite(at)) reason = 'FECHA_DESCONOCIDA';
+    else if (at > now + 3600000) reason = 'FECHA_FUTURA';
+    else if (now - at > windowMs) reason = 'FUERA_DE_VENTANA_14_DIAS';
+    else if (!/clases|profesor|profesora|particular|parcial|final|ayuda|quimica|fisica|matematica|algebra|analisis|biologia|examen|ingreso|tutori[ao]|necesito|busco/i.test(txt))
+      reason = 'SIN_PALABRAS_CLAVE';
+    else if (known[id]) {
+      reason = 'YA_PROCESADO';
+      res.repetidos++;
+    }
+    if (reason) {
+      audit.push(orqAuditEntry_(run, source, 'Foros', it, id, 'DESCARTADO', reason));
+    } else {
+      unclassified.push(it);
+      audit.push(orqAuditEntry_(run, source, 'Foros', it, id, 'ENVIADO_A_CLASIFICACION', 'FILTROS_SUPERADOS'));
+    }
   });
+  orqAuditRows_(ss, audit);
 
   var hallazgosRows = [];
   var model = String(cfg.GEMINI_MODEL || 'gemini-3.5-flash-lite');
@@ -1149,6 +1194,20 @@ function orqStatus() {
     });
   }
 
+  // Resumen de auditoría: causas de descarte con métricas reales.
+  var auditSummary = {total:0,descartados:0,enviados:0,motivos:{}};
+  if (run.id && ss.getSheetByName('OrqAuditoria')) {
+    orqRows_(ss.getSheetByName('OrqAuditoria')).forEach(function(r) {
+      if (String(r[0]) !== run.id) return;
+      auditSummary.total++;
+      if (String(r[9]) === 'DESCARTADO') {
+        auditSummary.descartados++;
+        var reason = String(r[10] || 'OTRO');
+        auditSummary.motivos[reason] = (auditSummary.motivos[reason] || 0) + 1;
+      } else if (String(r[9]) === 'ENVIADO_A_CLASIFICACION') auditSummary.enviados++;
+    });
+  }
+
   // Historial diario
   var daily = {};
   if (ss.getSheetByName('OrqCorridas')) {
@@ -1187,6 +1246,7 @@ function orqStatus() {
     mensaje: run.mensaje || '',
     maxComments: run.maxComments || 15,
     metricas: totals,
+    auditoria: auditSummary,
     candidatos: candidates.slice(0, 40),
     fuentes: opSources,
     fuentesOperativas: opSources,
