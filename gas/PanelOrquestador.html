@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <base target="_top">
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Centro de control — Alumnos</title>
+  <style>
+    :root{color-scheme:light;--ink:#1e293b;--muted:#64748b;--line:#dbe3ec;--bg:#f5f7fa;--blue:#3159a4;--green:#177a59;--amber:#a15f12;--red:#ae313a;}
+    *{box-sizing:border-box}body{margin:0;font:14px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif;background:var(--bg);color:var(--ink)}
+    .wrap{max-width:1040px;margin:0 auto;padding:22px 18px 60px}.top{display:flex;justify-content:space-between;gap:16px;align-items:center;margin-bottom:20px}
+    h1{font-size:22px;line-height:1.2;margin:0 0 6px}.note{color:var(--muted);font-size:12px}
+    .panel{border:1px solid var(--line);background:#fff;border-radius:12px;padding:19px;margin:0 0 16px;box-shadow:0 1px 4px #0b24401a}
+    h2{font-size:15px;margin:0 0 12px}.status{display:inline-block;padding:5px 9px;background:#e8edf3;border-radius:999px;font-size:11px;font-weight:700}
+    .status.running{color:#1e4b96;background:#e3eefc}.status.ok{color:#176a4c;background:#dff5ec}.status.err{color:#9e3037;background:#fae8e9}
+    .buttons{display:flex;gap:9px;flex-wrap:wrap}.button{padding:11px 18px;border:0;border-radius:8px;background:var(--blue);color:#fff;font-weight:700;cursor:pointer;font-size:14px}
+    button:disabled{opacity:.5;cursor:not-allowed}.secondary{background:#ecf1f8;color:#26436b}.danger{background:#fff2f2;color:#9e3037;border:1px solid #eec7cb}
+    .options{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:7px;margin:14px 0}
+    label.source{display:flex;gap:9px;align-items:flex-start;padding:10px;border:1px solid var(--line);border-radius:8px;cursor:pointer}
+    label.source input{margin-top:3px;flex-shrink:0}.source b{display:block;font-size:12px}.source em{font-style:normal;color:var(--muted);font-size:11px}
+    .line{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:10px 0}
+    select{padding:8px 12px;border-radius:7px;border:1px solid #b7c3d2;background:#fff}
+    .progress{height:13px;background:#e9eef5;border-radius:99px;overflow:hidden;margin:10px 0 6px}
+    .progress>div{background:#3b72bf;height:100%;width:0;transition:width .3s}
+    .grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
+    .metric{padding:12px;background:#f7f9fc;border-radius:9px}.metric strong{font-size:24px;display:block}.metric span{color:var(--muted);font-size:11px}
+    table{border-collapse:collapse;width:100%;font-size:12px}th,td{padding:9px 7px;text-align:left;border-bottom:1px solid #e7ebf0}
+    th{color:var(--muted);font-size:11px;font-weight:700}td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}
+    .scroller{overflow-x:auto}.empty{padding:13px;color:var(--muted);font-size:12px}
+    .bars{height:9px;min-width:50px;background:#e7edf4;border-radius:99px;overflow:hidden}.bars div{height:100%;background:#4e84c7}
+    .notice{background:#fdf7e9;color:#77541a;padding:11px;border-radius:8px;font-size:12px;margin-top:12px}
+    .error{color:var(--red);min-height:18px;font-size:12px;margin:8px 0}
+    a{color:#1f5aa6;text-decoration:none}a:hover{text-decoration:underline}
+    @media(max-width:650px){.grid{grid-template-columns:repeat(2,1fr)}.top{align-items:flex-start;flex-direction:column}.wrap{padding:14px 10px}}
+  </style>
+</head>
+<body>
+<div class="wrap">
+  <div class="top">
+    <div><h1>Centro de control de captación</h1>
+      <div class="note">Buscador automatizado · Entorno STAGING · Sin mensajes automáticos</div></div>
+    <div><span id="badge" class="status">Conectando…</span></div>
+  </div>
+  <section class="panel" aria-labelledby="config-title">
+    <h2 id="config-title">1. Fuentes de búsqueda</h2>
+    <p class="note">Seleccioná una vez los videos que querés consultar. La selección se conserva para las siguientes corridas.</p>
+    <div id="options" class="options"><span class="empty">Leyendo fuentes…</span></div>
+    <div class="line">
+      <label for="maxComments">Comentarios por video:</label>
+      <select id="maxComments"><option value="5">5</option><option value="10">10</option><option value="20" selected>20</option></select>
+      <span class="note">Máximo: 10 videos por corrida.</span>
+    </div>
+    <div class="buttons">
+      <button id="start" class="button" type="button" onclick="startRun()">▶ Iniciar búsqueda</button>
+      <button id="stop" class="button danger" type="button" onclick="stopRun()" disabled>Detener</button>
+      <button id="refresh" class="button secondary" type="button" onclick="refresh()">Actualizar</button>
+    </div>
+    <div id="message" class="error" role="alert"></div>
+    <div class="notice">Reddit, Facebook Groups, Instagram y TikTok todavía no tienen conectores de captación operativos y autorizados. No se simulan búsquedas en esas plataformas.</div>
+  </section>
+  <section class="panel">
+    <h2>2. Estado de la búsqueda</h2>
+    <div id="runid" class="note">Sin corridas.</div>
+    <div class="progress" aria-label="Progreso de fuentes"><div id="fill"></div></div>
+    <div id="progressLabel" class="note">—</div>
+    <div id="stateDetail" class="note" style="margin-top:8px"></div>
+    <div class="grid" style="margin-top:17px">
+      <div class="metric"><strong id="read">0</strong><span>Comentarios leídos</span></div>
+      <div class="metric"><strong id="evaluated">0</strong><span>Clasificados</span></div>
+      <div class="metric"><strong id="potential">0</strong><span>Candidatos para revisión</span></div>
+      <div class="metric"><strong id="errors">0</strong><span>Errores</span></div>
+    </div>
+    <div class="note" style="margin-top:12px" id="apiStats"></div>
+  </section>
+  <section class="panel">
+    <h2>3. Resultados por video</h2>
+    <div class="scroller"><table>
+      <thead><tr><th>Fuente</th><th>Estado</th><th class="num">Leídos</th><th class="num">Clasificados</th><th class="num">Candidatos</th><th class="num">Errores</th></tr></thead>
+      <tbody id="sourceRows"><tr><td colspan="6" class="empty">Todavía no hay resultados.</td></tr></tbody>
+    </table></div>
+  </section>
+  <section class="panel">
+    <h2>4. Evolución diaria</h2>
+    <div class="note">Cada día acumula sus corridas reales, aunque no hayan encontrado alumnos.</div>
+    <div class="scroller"><table>
+      <thead><tr><th>Fecha</th><th class="num">Corridas</th><th class="num">Leídos</th><th class="num">Clasificados</th><th class="num">Candidatos</th><th>Actividad</th></tr></thead>
+      <tbody id="dailyRows"><tr><td colspan="6" class="empty">Sin estadísticas todavía.</td></tr></tbody>
+    </table></div>
+    <p class="note">«Leídos» son comentarios consultados, no personas alcanzadas. «Candidatos» no implica contacto ni contratación.</p>
+    <p><a id="sheetLink" href="#" target="_blank" rel="noopener noreferrer">Abrir planilla de resultados ↗</a></p>
+  </section>
+</div>
+<script>
+let latest=null,dirty=false,inFlight=false;
+const $=id=>document.getElementById(id);
+const esc=x=>String(x==null?'':x).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+function setMessage(m){$('message').textContent=m||'';}
+function selected(){return Array.from(document.querySelectorAll('input[name=yt]:checked')).map(x=>x.value);}
+function drawSources(data){
+  if(dirty)return;
+  const chosen=new Set(data.seleccion||[]);
+  $('options').innerHTML=(data.fuentes||[]).map(x=>
+    '<label class="source"><input type="checkbox" name="yt" value="'+esc(x.id)+'"'+(chosen.has(x.id)?' checked':'')+
+    ' onchange="dirty=true"><span><b>'+esc(x.name)+'</b><em>'+esc(x.subject)+' · '+esc(x.videoId)+'</em></span></label>'
+  ).join('')||'<span class="empty">No hay videos válidos en la pestaña Fuentes.</span>';
+}
+function render(d){
+  latest=d;
+  const running=d.estado==='EJECUTANDO';
+  $('badge').textContent=d.estado; $('badge').className='status '+(running?'running':d.estado==='FINALIZADO'?'ok':d.estado==='ERROR'?'err':'');
+  $('start').disabled=running||inFlight;$('stop').disabled=!running||inFlight;$('refresh').disabled=inFlight;
+  $('runid').textContent=d.id?'Corrida '+d.id:'No hay corrida activa.';
+  $('fill').style.width=(d.total?Math.min(100,100*d.cursor/d.total):0)+'%';
+  $('progressLabel').textContent=d.cursor+' / '+d.total+' fuentes procesadas';
+  $('stateDetail').textContent=d.mensaje||'';
+  const m=d.metricas||{};
+  $('read').textContent=m.leidos||0;$('evaluated').textContent=m.clasificados||0;
+  $('potential').textContent=m.candidatos||0;$('errors').textContent=m.errores||0;
+  $('apiStats').textContent='YouTube API: '+(m.youtube||0)+' solicitudes · Gemini: '+(m.gemini||0)+
+    ' llamadas · Repetidos: '+(m.repetidos||0);
+  $('sourceRows').innerHTML=(m.detalles||[]).map(x=>
+    '<tr><td>'+esc(x.fuente)+'</td><td>'+esc(x.estado)+'</td><td class="num">'+x.leidos+
+    '</td><td class="num">'+x.clasificados+'</td><td class="num">'+x.candidatos+
+    '</td><td class="num">'+x.errores+'</td></tr>'
+  ).join('')||'<tr><td colspan="6" class="empty">Sin resultados todavía.</td></tr>';
+  const hist=d.historial||[],max=Math.max(1,...hist.map(x=>x.leidos||0));
+  $('dailyRows').innerHTML=hist.map(x=>
+    '<tr><td>'+esc(x.fecha)+'</td><td class="num">'+x.corridas+'</td><td class="num">'+x.leidos+
+    '</td><td class="num">'+x.clasificados+'</td><td class="num">'+x.candidatos+
+    '</td><td><div class="bars"><div style="width:'+Math.round(100*x.leidos/max)+'%"></div></div></td></tr>'
+  ).join('')||'<tr><td colspan="6" class="empty">El historial aparecerá después de la primera ejecución.</td></tr>';
+  $('sheetLink').href=d.link||'#';
+  drawSources(d);
+}
+function refresh(){
+  if(inFlight)return;
+  google.script.run.withSuccessHandler(d=>{render(d);setMessage('');})
+    .withFailureHandler(e=>setMessage(e&&e.message||'No se pudo consultar el estado.')).orqStatus();
+}
+function startRun(){
+  const ids=selected();
+  if(!ids.length)return setMessage('Elegí por lo menos un video.');
+  if(ids.length>10)return setMessage('Esta versión admite hasta 10 videos por corrida.');
+  if(inFlight)return;
+  inFlight=true;setMessage('Buscando… La primera fuente se procesa ahora.');
+  $('start').disabled=true;
+  google.script.run.withSuccessHandler(d=>{
+    inFlight=false;dirty=false;render(d);setMessage('');
+  }).withFailureHandler(e=>{
+    inFlight=false;setMessage(e&&e.message||'No se pudo iniciar la búsqueda.');refresh();
+  }).orqStart(ids,Number($('maxComments').value));
+}
+function stopRun(){
+  if(inFlight)return;inFlight=true;$('stop').disabled=true;
+  google.script.run.withSuccessHandler(d=>{
+    inFlight=false;setMessage(d.mensaje||'Detención solicitada.');refresh();
+  }).withFailureHandler(e=>{
+    inFlight=false;setMessage(e&&e.message||'Error al detener.');refresh();
+  }).orqStop();
+}
+refresh();
+setInterval(()=>{if(!inFlight)refresh()},12000);
+</script>
+</body>
+</html>
