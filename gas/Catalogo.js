@@ -2776,35 +2776,12 @@ function clasificarFuenteCatalogo(s) {
  * - Asegura que todas las fuentes nuevas arranquen con Activo = FALSE y estado PENDIENTE_VERIFICACION.
  */
 function resolverSpreadsheetCatalogo_() {
-  if (typeof orqDb_ === 'function') {
-    try {
-      var s = orqDb_();
-      if (s) return s;
-    } catch(e) {}
+  // Seguridad: una migración NUNCA puede saltarse la verificación de STAGING.
+  // No hay fallback a SHEET_ID, hoja activa ni otro proyecto.
+  if (typeof orqDb_ !== 'function') {
+    throw new Error('No está disponible orqDb_. La migración se canceló sin modificar datos.');
   }
-  if (typeof getSpreadsheet_ === 'function') {
-    try {
-      var s = getSpreadsheet_();
-      if (s) return s;
-    } catch(e) {}
-  }
-  if (typeof PropertiesService !== 'undefined') {
-    try {
-      var p = PropertiesService.getScriptProperties();
-      var id = p ? p.getProperty('SHEET_ID') : null;
-      if (!id && typeof ORQ_STAGING_ID !== 'undefined') id = ORQ_STAGING_ID;
-      if (id && typeof SpreadsheetApp !== 'undefined') {
-        return SpreadsheetApp.openById(id);
-      }
-    } catch(e) {}
-  }
-  if (typeof SpreadsheetApp !== 'undefined' && typeof SpreadsheetApp.getActiveSpreadsheet === 'function') {
-    try {
-      var act = SpreadsheetApp.getActiveSpreadsheet();
-      if (act) return act;
-    } catch(e) {}
-  }
-  throw new Error('No se pudo determinar la planilla de cálculo. Configurá SHEET_ID en Script Properties.');
+  return orqDb_();
 }
 
 function respaldarHojaFuentes_(ss) {
@@ -2870,6 +2847,7 @@ function sincronizarCatalogoFuentes(ss, opts) {
     var rawHeaders = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0];
     rawHeaders.forEach(function(h, idx) {
       var norm = String(h || '').trim().toLowerCase()
+        .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
         .replace(/[^a-z0-9]/g, '');
       headerMap[norm] = idx;
     });
@@ -3006,7 +2984,7 @@ function migrarCatalogoFuentesSeguro() {
   if (!sh) throw new Error('Error crítico: no se encontró la hoja Fuentes tras la migración.');
   var lr = sh.getLastRow(), lc = sh.getLastColumn();
   if (lc !== 15) throw new Error('Verificación fallida: se esperaban 15 columnas canónicas, pero hay ' + lc);
-  if (lr < 240) throw new Error('Verificación fallida: se esperaban 239 filas de datos + 1 encabezado, pero hay ' + lr);
+  if (lr !== 240) throw new Error('Verificación fallida: se esperaban exactamente 239 fuentes + 1 encabezado, pero hay ' + lr);
 
   var headers = sh.getRange(1, 1, 1, 15).getValues()[0];
   var rows = sh.getRange(2, 1, lr - 1, 15).getValues();
@@ -3026,6 +3004,14 @@ function migrarCatalogoFuentesSeguro() {
   }
 
   if (hasEmptyId) throw new Error('Verificación fallida: existen filas con ID Fuente vacío.');
+  if (Object.keys(uniqueIds).length !== 239) {
+    throw new Error('Verificación fallida: no hay exactamente 239 IDs únicos.');
+  }
+  MASTER_CATALOG_SOURCES.forEach(function(s) {
+    if (uniqueIds[s.id] !== 1) {
+      throw new Error('Verificación fallida: ID faltante o repetido: ' + s.id);
+    }
+  });
 
   var report = [
     '=================================================================',
