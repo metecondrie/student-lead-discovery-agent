@@ -869,7 +869,7 @@ function orqExecuteRss_(ss, run, source) {
     var rawDate = it.publishedAt || it.date;
     var at = rawDate ? new Date(rawDate).getTime() : NaN;
     var txt = ((it.title || '') + ' ' + (it.text || '')).toLowerCase()
-      .normalize('NFD').replace(/[\\u0300-\\u036f]/g, '');
+      .normalize('NFD').replace(/[\u0300-\u036f]/g, '');
     var reason = '';
     if (!isFinite(at)) reason = 'FECHA_DESCONOCIDA';
     else if (at > now + 3600000) reason = 'FECHA_FUTURA';
