@@ -528,15 +528,44 @@ function parseRss(xmlText, srcKey, srcLabel) {
   srcLabel = srcLabel || 'RSS Feed';
   if (!xmlText) return [];
   var items = [];
-  var itemRe = /<item\b[^>]*>([\s\S]*?)<\/item>/gi;
+
+  // Detectar si contiene <item> (RSS 2.0) o <entry> (Atom)
+  var isAtom = /<entry\b/i.test(xmlText);
+  var entryRe = isAtom ? /<entry\b[^>]*>([\s\S]*?)<\/entry>/gi : /<item\b[^>]*>([\s\S]*?)<\/item>/gi;
   var m;
-  while ((m = itemRe.exec(xmlText)) !== null) {
+
+  while ((m = entryRe.exec(xmlText)) !== null) {
     var rawItem = m[1];
     var title = extractXmlTag(rawItem, 'title');
-    var link = extractXmlTag(rawItem, 'link');
-    var pubDateStr = extractXmlTag(rawItem, 'pubDate');
-    var desc = extractXmlTag(rawItem, 'description') || extractXmlTag(rawItem, 'content:encoded');
-    var author = extractXmlTag(rawItem, 'dc:creator') || extractXmlTag(rawItem, 'author');
+
+    // Link: en Atom suele ser <link href="..."/> o <link rel="alternate" href="..."/>
+    var link = '';
+    if (isAtom) {
+      var linkHrefMatch = rawItem.match(/<link\b[^>]*\bhref=["']([^"']+)["'][^>]*\/?>(?:<\/link>)?/i);
+      link = linkHrefMatch ? linkHrefMatch[1] : extractXmlTag(rawItem, 'link');
+    } else {
+      link = extractXmlTag(rawItem, 'link');
+    }
+
+    // Fecha: pubDate, dc:date, published, o updated
+    var pubDateStr = extractXmlTag(rawItem, 'pubDate') ||
+                     extractXmlTag(rawItem, 'dc:date') ||
+                     extractXmlTag(rawItem, 'published') ||
+                     extractXmlTag(rawItem, 'updated');
+
+    // Descripción / Contenido
+    var desc = extractXmlTag(rawItem, 'description') ||
+               extractXmlTag(rawItem, 'content:encoded') ||
+               extractXmlTag(rawItem, 'content') ||
+               extractXmlTag(rawItem, 'summary');
+
+    // Autor
+    var author = extractXmlTag(rawItem, 'dc:creator') ||
+                 extractXmlTag(rawItem, 'author');
+    if (isAtom && !author) {
+      var authorNameMatch = rawItem.match(/<author\b[^>]*>[\s\S]*?<name>([\s\S]*?)<\/name>[\s\S]*?<\/author>/i);
+      if (authorNameMatch) author = authorNameMatch[1];
+    }
 
     var cleanTitle = stripHtml(title).replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, '$1').trim();
     var cleanDesc = stripHtml(desc).replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, '$1').slice(0, 3000).trim();
@@ -545,7 +574,8 @@ function parseRss(xmlText, srcKey, srcLabel) {
 
     var pubDate = null;
     if (pubDateStr) {
-      var d = new Date(pubDateStr.replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, '$1').trim());
+      var rawDate = pubDateStr.replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, '$1').trim();
+      var d = new Date(rawDate);
       if (!isNaN(d.getTime())) pubDate = d;
     }
 
@@ -561,6 +591,7 @@ function parseRss(xmlText, srcKey, srcLabel) {
       text: fullText,
       studentName: cleanAuthor || extractName(cleanTitle, cleanDesc),
       publishedAt: pubDate,
+      date: pubDate, // Expone ambas propiedades para evitar date bugs
       threadId: '',
       msgId: ''
     });

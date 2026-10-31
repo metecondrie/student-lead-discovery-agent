@@ -2767,24 +2767,98 @@ function clasificarFuenteCatalogo(s) {
  * Reconcilia e incorpora las 239 entradas del catálogo maestro a la hoja Fuentes.
  * Preserva estrictamente los identificadores y registros preexistentes en STAGING.
  */
+/**
+ * Reconcilia e incorpora las 239 entradas del catálogo maestro a la hoja Fuentes.
+ * Migración idempotente por encabezado:
+ * - Detecta el encabezado existente (10 columnas históricas o nuevas).
+ * - Migra a las 15 columnas canónicas completas.
+ * - Preserva rigurosamente los valores existentes de Activo, Notas, ID y Última revisión.
+ * - Asegura que todas las fuentes nuevas arranquen con Activo = FALSE y estado PENDIENTE_VERIFICACION.
+ */
 function sincronizarCatalogoFuentes(ss, opts) {
   opts = opts || {};
   var sh = ss.getSheetByName('Fuentes') || ss.insertSheet('Fuentes');
-  var headers = ['ID Fuente', 'Plataforma', 'Canal / Creador', 'Temas / Materias', 'Nivel / Universidad', 'URL Canal / Recurso', 'ID Recurso', 'Activo', 'Tipo Acceso', 'Prioridad', 'Disponibilidad', 'Conector', 'Notas'];
-  
-  if (sh.getLastRow() === 0) {
-    sh.getRange(1, 1, 1, headers.length).setValues([headers]);
-    sh.setFrozenRows(1);
+  var canonicalHeaders = [
+    'ID Fuente', 'Plataforma', 'Canal / Creador', 'Temas / Materias', 'Nivel / Universidad',
+    'URL Canal / Recurso', 'ID Recurso', 'Activo', 'Tipo Acceso', 'Prioridad',
+    'Disponibilidad', 'Conector', 'Estado Verificacion', 'Ultima revision', 'Notas'
+  ];
+
+  var lastRow = sh.getLastRow();
+  var existingRows = [];
+  var headerMap = {};
+
+  if (lastRow > 0) {
+    var rawHeaders = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0];
+    rawHeaders.forEach(function(h, idx) {
+      var norm = String(h || '').trim().toLowerCase()
+        .replace(/[^a-z0-9]/g, '');
+      headerMap[norm] = idx;
+    });
+
+    if (lastRow > 1) {
+      existingRows = sh.getRange(2, 1, lastRow - 1, sh.getLastColumn()).getValues();
+    }
   }
-  
-  var existingRows = sh.getLastRow() > 1 ? sh.getRange(2, 1, sh.getLastRow() - 1, sh.getLastColumn()).getValues() : [];
+
+  // Mapear cada fila existente por nombre de columna
+  function getVal(row, keyVariants) {
+    for (var k = 0; k < keyVariants.length; k++) {
+      var idx = headerMap[keyVariants[k]];
+      if (typeof idx === 'number' && idx >= 0 && idx < row.length) {
+        return row[idx];
+      }
+    }
+    return '';
+  }
+
   var existingById = {}, existingByUrl = {};
+  var migratedExisting = [];
+
   existingRows.forEach(function(r) {
-    if (r[0]) existingById[String(r[0]).trim()] = r;
-    if (r[5]) existingByUrl[String(r[5]).trim().toLowerCase()] = r;
+    var rawId = String(getVal(r, ['idfuente', 'id', 'idfuentes']) || r[0] || '').trim();
+    var plat = String(getVal(r, ['plataforma', 'plat']) || r[1] || '').trim();
+    var creator = String(getVal(r, ['canalcreador', 'creador', 'canal', 'nombre']) || r[2] || '').trim();
+    var topics = String(getVal(r, ['temasmaterias', 'materias', 'tema']) || r[3] || '').trim();
+    var level = String(getVal(r, ['niveluniversidad', 'nivel']) || r[4] || '').trim();
+    var url = String(getVal(r, ['urlcanalrecurso', 'urlrecurso', 'url']) || r[5] || '').trim();
+    var resId = String(getVal(r, ['idrecurso', 'resourceid', 'recursoid']) || r[6] || '').trim();
+    var rawAct = getVal(r, ['activo']);
+    if (rawAct === '' && typeof r[7] !== 'undefined') rawAct = r[7];
+    var active = (String(rawAct).toUpperCase() === 'TRUE' || rawAct === true);
+
+    var access = String(getVal(r, ['tipoacceso', 'acceso']) || '').trim();
+    var priority = String(getVal(r, ['prioridad']) || '').trim();
+    var avail = String(getVal(r, ['disponibilidad']) || '').trim();
+    var connector = String(getVal(r, ['conector']) || '').trim();
+    var verState = String(getVal(r, ['estadoverificacion', 'estado']) || '').trim();
+    var lastRev = getVal(r, ['ultimarevision', 'revisado']);
+    var notes = String(getVal(r, ['notas', 'observaciones']) || '').trim();
+
+    // Si faltan campos de clasificación, autocompletar mediante clasificarFuenteCatalogo
+    if (!connector || !access || !avail) {
+      var c = clasificarFuenteCatalogo({ id: rawId, plataforma: plat, creador: creator, url: url, resourceId: resId, notas: notes });
+      access = access || c.tipoAcceso;
+      priority = priority || c.prioridad;
+      avail = avail || c.disponibilidad;
+      connector = connector || c.conector;
+    }
+    if (!verState) {
+      verState = (connector !== 'ninguno') ? 'PENDIENTE_VERIFICACION' : (avail === 'NO_AUTOMATIZABLE' ? 'NO_AUTOMATIZABLE' : 'PENDIENTE_VERIFICACION');
+    }
+
+    var record = [
+      rawId, plat, creator, topics, level, url, resId, active,
+      access, priority, avail, connector, verState, lastRev || '', notes
+    ];
+
+    if (rawId) existingById[rawId] = record;
+    if (url) existingByUrl[url.toLowerCase()] = record;
+    migratedExisting.push(record);
   });
 
-  var toAppend = [];
+  // Incorporar fuentes faltantes del catálogo maestro (239 entradas)
+  var addedCount = 0;
   MASTER_CATALOG_SOURCES.forEach(function(s) {
     var id = String(s.id).trim();
     var url = String(s.url || '').trim().toLowerCase();
@@ -2792,7 +2866,8 @@ function sincronizarCatalogoFuentes(ss, opts) {
       return;
     }
     var c = clasificarFuenteCatalogo(s);
-    toAppend.push([
+    var verState = (c.conector !== 'ninguno') ? 'PENDIENTE_VERIFICACION' : (c.disponibilidad === 'NO_AUTOMATIZABLE' ? 'NO_AUTOMATIZABLE' : 'PENDIENTE_VERIFICACION');
+    var newRow = [
       s.id,
       s.plataforma,
       s.creador,
@@ -2800,23 +2875,34 @@ function sincronizarCatalogoFuentes(ss, opts) {
       s.nivel,
       s.url,
       s.resourceId || '',
-      false, // Activo = FALSE obligatorio
+      false, // Activo = FALSE obligatorio para fuentes del catálogo inicial
       c.tipoAcceso,
       c.prioridad,
       c.disponibilidad,
       c.conector,
+      verState,
+      '', // Última revisión
       s.notas || c.motivoNoDisp
-    ]);
+    ];
+    migratedExisting.push(newRow);
+    existingById[s.id] = newRow;
+    if (url) existingByUrl[url] = newRow;
+    addedCount++;
   });
 
-  if (toAppend.length > 0) {
-    sh.getRange(sh.getLastRow() + 1, 1, toAppend.length, headers.length).setValues(toAppend);
+  // Escribir encabezado canónico y todas las filas migradas
+  if (typeof sh.clearContents === 'function') { sh.clearContents(); }
+  sh.getRange(1, 1, 1, canonicalHeaders.length).setValues([canonicalHeaders]);
+  sh.setFrozenRows(1);
+  if (migratedExisting.length > 0) {
+    sh.getRange(2, 1, migratedExisting.length, canonicalHeaders.length).setValues(migratedExisting);
   }
 
   return {
     preservados: existingRows.length,
-    agregados: toAppend.length,
-    total: existingRows.length + toAppend.length
+    agregados: addedCount,
+    total: migratedExisting.length,
+    unicas: migratedExisting.length
   };
 }
 

@@ -26,8 +26,7 @@ var ORQ_HEADERS = {
 /** Entrada Web App privada: centro de control */
 function doGet() {
   return HtmlService.createHtmlOutputFromFile('PanelOrquestador')
-    .setTitle('Captación de alumnos | Centro de control')
-    .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
+    .setTitle('Captación de alumnos | Centro de control');
 }
 
 /** Acceso seguro a la planilla STAGING */
@@ -109,35 +108,97 @@ function orqResolveConnector_(source) {
 }
 
 /** Obtiene y sincroniza el catálogo de fuentes asegurando los 239 registros */
+
+function orqUpdateSourceState_(ss, sourceId, newState) {
+  try {
+    var sh = ss.getSheetByName('Fuentes');
+    if (!sh || sh.getLastRow() < 2) return;
+    var rows = sh.getRange(2, 1, sh.getLastRow() - 1, sh.getLastColumn()).getValues();
+    for (var i = 0; i < rows.length; i++) {
+      if (String(rows[i][0]).trim() === String(sourceId).trim()) {
+        // Columna 13 es Estado Verificacion (1-based index 13)
+        if (sh.getLastColumn() >= 13) {
+          sh.getRange(i + 2, 13).setValue(newState);
+        }
+        break;
+      }
+    }
+  } catch(e) {}
+}
+
+function orqSetSourceActive(sourceId, active) {
+  var ss = orqDb_();
+  var sh = ss.getSheetByName('Fuentes');
+  if (!sh || sh.getLastRow() < 2) throw new Error('Hoja Fuentes no encontrada.');
+  var rows = sh.getRange(2, 1, sh.getLastRow() - 1, sh.getLastColumn()).getValues();
+  for (var i = 0; i < rows.length; i++) {
+    if (String(rows[i][0]).trim() === String(sourceId).trim()) {
+      sh.getRange(i + 2, 8).setValue(!!active);
+      return { ok: true, sourceId: sourceId, activo: !!active };
+    }
+  }
+  throw new Error('Fuente no encontrada: ' + sourceId);
+}
+
+function orqScheduleAt_(dateObj) {
+  orqRemoveTriggers_();
+  var ms = Math.max(30000, dateObj.getTime() - Date.now());
+  ScriptApp.newTrigger('orqTick').timeBased().after(ms).create();
+}
+
 function orqSources_(ss) {
   if (typeof sincronizarCatalogoFuentes === 'function') {
     try { sincronizarCatalogoFuentes(ss); } catch(e) {}
   }
   var sh = ss.getSheetByName('Fuentes');
   if (!sh) throw new Error('La hoja Fuentes no existe.');
-  var rows = orqRows_(sh);
-  return rows.map(function(r) {
-    var rawId = String(r[0] || '').trim();
-    var plat = String(r[1] || '').trim();
-    var name = String(r[2] || rawId).trim();
-    var topics = String(r[3] || '').trim();
-    var level = String(r[4] || '').trim();
-    var url = String(r[5] || '').trim();
-    var resId = String(r[6] || '').trim();
-    var active = String(r[7]).toUpperCase() === 'TRUE' || r[7] === true;
-    var access = String(r[8] || '').trim();
-    var priority = String(r[9] || '').trim();
-    var avail = String(r[10] || '').trim();
-    var conn = String(r[11] || '').trim();
-    var notes = String(r[12] || '').trim();
+  var lastRow = sh.getLastRow(), lastCol = sh.getLastColumn();
+  if (lastRow < 2) return [];
 
-    // Fallback de clasificación si columnas extendidas están vacías
+  var headers = sh.getRange(1, 1, 1, lastCol).getValues()[0];
+  var hMap = {};
+  headers.forEach(function(h, idx) {
+    var norm = String(h || '').trim().toLowerCase().replace(/[^a-z0-9]/g, '');
+    hMap[norm] = idx;
+  });
+
+  function val(row, keys, fallbackIdx) {
+    for (var k = 0; k < keys.length; k++) {
+      var idx = hMap[keys[k]];
+      if (typeof idx === 'number' && idx >= 0 && idx < row.length) return row[idx];
+    }
+    return typeof fallbackIdx === 'number' && fallbackIdx < row.length ? row[fallbackIdx] : '';
+  }
+
+  var rows = sh.getRange(2, 1, lastRow - 1, lastCol).getValues();
+  return rows.map(function(r) {
+    var rawId = String(val(r, ['idfuente', 'id', 'idfuentes'], 0) || '').trim();
+    var plat = String(val(r, ['plataforma', 'plat'], 1) || '').trim();
+    var name = String(val(r, ['canalcreador', 'creador', 'canal', 'nombre'], 2) || rawId).trim();
+    var topics = String(val(r, ['temasmaterias', 'materias', 'tema'], 3) || '').trim();
+    var level = String(val(r, ['niveluniversidad', 'nivel'], 4) || '').trim();
+    var url = String(val(r, ['urlcanalrecurso', 'urlrecurso', 'url'], 5) || '').trim();
+    var resId = String(val(r, ['idrecurso', 'resourceid', 'recursoid'], 6) || '').trim();
+
+    var rawAct = val(r, ['activo'], 7);
+    var active = (String(rawAct).toUpperCase() === 'TRUE' || rawAct === true);
+
+    var access = String(val(r, ['tipoacceso', 'acceso'], 8) || '').trim();
+    var priority = String(val(r, ['prioridad'], 9) || '').trim();
+    var avail = String(val(r, ['disponibilidad'], 10) || '').trim();
+    var conn = String(val(r, ['conector'], 11) || '').trim();
+    var verState = String(val(r, ['estadoverificacion', 'estado'], 12) || '').trim();
+    var notes = String(val(r, ['notas', 'observaciones'], 14) || '').trim();
+
     if (!conn) {
       var c = orqResolveConnector_({ id: rawId, plataforma: plat, creador: name, url: url, resourceId: resId, notas: notes });
-      access = c.tipoAcceso;
-      priority = c.prioridad;
-      avail = c.disponibilidad;
-      conn = c.conector;
+      access = access || c.tipoAcceso;
+      priority = priority || c.prioridad;
+      avail = avail || c.disponibilidad;
+      conn = conn || c.conector;
+    }
+    if (!verState) {
+      verState = (conn !== 'ninguno') ? 'PENDIENTE_VERIFICACION' : (avail === 'NO_AUTOMATIZABLE' ? 'NO_AUTOMATIZABLE' : 'PENDIENTE_VERIFICACION');
     }
 
     return {
@@ -153,12 +214,12 @@ function orqSources_(ss) {
       priority: priority || 'P2',
       availability: avail || (conn === 'ninguno' ? 'NO_AUTOMATIZABLE' : 'DISPONIBLE'),
       connector: conn || 'ninguno',
+      verificationState: verState,
       notes: notes
     };
   });
 }
 
-/** Estado persistente liviano en PropertiesService (sólo metadatos del run, sin listas) */
 function orqGetRun_() {
   var raw = PropertiesService.getScriptProperties().getProperty('ORQ_RUN');
   if (!raw) return { id: '', estado: 'SIN_CORRIDAS', cursor: 0, total: 0, inicio: '', mensaje: 'Sin búsquedas activas.' };
@@ -249,7 +310,7 @@ function orqStart(sourceIds, maxComments) {
     var current = orqGetRun_();
     if (current.estado === 'EJECUTANDO') throw new Error('Ya existe una búsqueda en curso (' + current.id + ').');
 
-    // Cargar todas las fuentes del catálogo
+    // Cargar fuentes del catálogo
     var all = orqSources_(ss);
     var functional = all.filter(function(s) {
       return ['youtube_canales', 'rss_foros', 'gmail_alertas'].indexOf(s.connector) >= 0;
@@ -261,13 +322,10 @@ function orqStart(sourceIds, maxComments) {
 
     var selectedSources = [];
     if (!sourceIds || sourceIds === 'ALL_ENABLED') {
-      // Selección global de todas las fuentes operativas habilitadas
+      // Regla estricta: ÚNICAMENTE fuentes operativas con Activo=TRUE en la planilla
       selectedSources = functional.filter(function(s) { return s.enabled === true; });
       if (!selectedSources.length) {
-        // Si ninguna está marcada como activa, tomar las fuentes operativas P0/P1 predeterminadas
-        selectedSources = functional.filter(function(s) {
-          return s.priority === 'P0' || s.priority === 'P1' || s.connector === 'youtube_canales' || s.connector === 'rss_foros';
-        });
+        throw new Error('SIN_FUENTES_HABILITADAS: No hay ninguna fuente activa (Activo=TRUE) en la hoja Fuentes. Habilitá al menos una fuente operativa antes de iniciar la búsqueda.');
       }
     } else {
       var wanted = {}, raw = sourceIds.map(function(x){ return String(x).trim(); });
@@ -276,19 +334,29 @@ function orqStart(sourceIds, maxComments) {
       if (selectedSources.length !== raw.length) {
         throw new Error('Hay fuentes seleccionadas sin video o conector funcional válido en Fuentes.');
       }
+      // Verificar que las fuentes seleccionadas estén activas
+      var inactive = selectedSources.filter(function(s) { return s.enabled !== true; });
+      if (inactive.length > 0) {
+        throw new Error('SIN_FUENTES_HABILITADAS: La fuente ' + inactive[0].id + ' (' + inactive[0].name + ') tiene Activo=FALSE. Habilitala en la hoja Fuentes antes de buscar.');
+      }
     }
 
     if (!selectedSources.length) {
-      throw new Error('No se encontraron fuentes operativas con conectores funcionales para la búsqueda.');
+      throw new Error('SIN_FUENTES_HABILITADAS: No se encontraron fuentes operativas habilitadas para la búsqueda.');
     }
 
     var count = Number(maxComments) || 15;
+
+    // Preflight de cuota diaria Gemini: sólo bloquea si la cuota ya está completamente agotada hoy
     var gcap = typeof checkGeminiQuota_ === 'function' ?
       checkGeminiQuota_(PropertiesService.getScriptProperties(), { GEMINI_MAX_DAILY_CALLS: Number(cfg.GEMINI_MAX_DAILY_CALLS) || 20 }) : { allowed: true, max: 20, count: 0 };
+    if (gcap.allowed === false || (gcap.max && (gcap.max - (gcap.count || 0)) <= 0)) {
+      throw new Error('PAUSADO_CUOTA: La cuota diaria de Gemini para hoy está agotada (' + (gcap.count || 0) + '/' + (gcap.max || 20) + '). Esperá a la próxima ventana de reinicio.');
+    }
     var estimated = selectedSources.length * Math.ceil(count / 5);
-    if (gcap.allowed === false || (gcap.max && estimated > (gcap.max - (gcap.count || 0)))) {
-      throw new Error('La configuración requiere hasta ' + estimated + ' llamadas a Gemini, pero quedan ' +
-        ((gcap.max || 20) - (gcap.count || 0)) + '. Elegí menos fuentes o comentarios por fuente.');
+    if (gcap.max && estimated > gcap.max && !(maxComments && maxComments.allowDistributed)) {
+      throw new Error('La configuración requiere hasta ' + estimated + ' llamadas a Gemini, pero el límite diario es ' +
+        gcap.max + '. Elegí menos fuentes o comentarios por fuente.');
     }
 
     // Validar claves necesarias según conectores seleccionados
@@ -296,7 +364,6 @@ function orqStart(sourceIds, maxComments) {
     if (hasYouTube) orqApiKey_('YOUTUBE_API_KEY');
     orqApiKey_('GEMINI_API_KEY');
 
-    var count = Number(maxComments) || 15;
     var runId = 'ORQ-' + Utilities.formatDate(new Date(), 'America/Argentina/Buenos_Aires', 'yyyyMMdd-HHmmss') +
       '-' + Utilities.getUuid().slice(0, 6);
 
@@ -329,7 +396,7 @@ function orqStart(sourceIds, maxComments) {
       total: selectedSources.length,
       inicio: now.toISOString(),
       maxComments: count,
-      mensaje: 'Búsqueda iniciada en ' + selectedSources.length + ' fuentes operativas.'
+      mensaje: 'Búsqueda iniciada en ' + selectedSources.length + ' fuentes operativas habilitadas.'
     };
     orqSaveRun_(runState);
     PropertiesService.getScriptProperties().deleteProperty('ORQ_DETENER_ID');
@@ -343,7 +410,6 @@ function orqStart(sourceIds, maxComments) {
   return orqStatus();
 }
 
-/** BOTÓN «DETENER»: Solicita detener la corrida de forma segura */
 function orqStop() {
   orqDb_();
   var run = orqGetRun_();
@@ -368,7 +434,41 @@ function orqTick() {
   try {
     ss = orqDb_();
     var p = PropertiesService.getScriptProperties();
+    var cfg = orqLoadConfig_();
     run = orqGetRun_();
+
+    // Reanudación desde PAUSADO_CUOTA
+    if (run.estado === 'PAUSADO_CUOTA') {
+      var nowMs = Date.now();
+      var resumeAt = run.proximaReanudacion ? new Date(run.proximaReanudacion).getTime() : 0;
+      var gcap = typeof checkGeminiQuota_ === 'function' ?
+        checkGeminiQuota_(p, { GEMINI_MAX_DAILY_CALLS: Number(cfg.GEMINI_MAX_DAILY_CALLS) || 20 }) : { allowed: true, count: 0, max: 20 };
+      var quotaReset = gcap.allowed && (gcap.count === 0 || (gcap.max - (gcap.count || 0)) >= 1);
+      var timeReached = resumeAt > 0 && nowMs >= resumeAt;
+
+      if (quotaReset || timeReached) {
+        run.estado = 'EJECUTANDO';
+        run.mensaje = 'Cuota restablecida. Reanudando búsqueda multifuente...';
+        delete run.proximaReanudacion;
+        delete run.motivoPausa;
+
+        // Resetear trabajos en OrqCola con estado PAUSADO_CUOTA a PENDIENTE
+        var shColaResume = orqSheet_(ss, 'OrqCola');
+        var cRows = orqRows_(shColaResume);
+        for (var ci = 0; ci < cRows.length; ci++) {
+          if (String(cRows[ci][0]) === run.id && String(cRows[ci][5]) === 'PAUSADO_CUOTA') {
+            shColaResume.getRange(ci + 2, 6, 1, 1).setValue('PENDIENTE');
+          }
+        }
+        orqSaveRun_(run);
+        orqUpdateRunRow_(ss, run);
+      } else {
+        // Aún no es seguro reanudar; mantener trigger programado
+        var waitTarget = new Date(resumeAt > 0 ? resumeAt : (nowMs + 3600000));
+        orqScheduleAt_(waitTarget);
+        return;
+      }
+    }
 
     if (run.estado !== 'EJECUTANDO') {
       orqRemoveTriggers_();
@@ -424,7 +524,7 @@ function orqTick() {
     var allSources = orqSources_(ss);
     var source = allSources.filter(function(s) { return s.id === job.sourceId; })[0];
     if (!source) {
-      source = { id: job.sourceId, platform: job.platform, connector: job.connector, name: job.sourceId, url: '' };
+      source = { id: job.sourceId, platform: job.platform, connector: job.connector, name: job.sourceId, url: '', enabled: true };
     }
 
     var result = null;
@@ -446,7 +546,7 @@ function orqTick() {
       ]]);
     } catch(err) {
       var errMsg = String(err && err.message || err).slice(0, 160);
-      var isQuota = /cuota|quota|429/i.test(errMsg);
+      var isQuota = /cuota|quota|429|resource_exhausted/i.test(errMsg);
       var finalState = isQuota ? 'PAUSADO_CUOTA' : 'ERROR';
       shCola.getRange(job.rowIdx, 1, 1, 11).setValues([[
         job.runId, job.jobId, job.sourceId, job.platform, job.connector,
@@ -471,9 +571,17 @@ function orqTick() {
         mensaje: errMsg
       };
       orqRecordFuente_(ss, result);
+
       if (isQuota) {
+        // Programar reanudación al siguiente reset (próxima medianoche o +1h)
+        var resetDate = new Date();
+        resetDate.setHours(resetDate.getHours() + 1); // Ventana de 1h de seguridad
         run.estado = 'PAUSADO_CUOTA';
-        run.mensaje = 'Límite de cuota alcanzado. Reanudación automática en la próxima ventana.';
+        run.proximaReanudacion = resetDate.toISOString();
+        run.motivoPausa = errMsg;
+        run.mensaje = 'Límite de cuota alcanzado (' + errMsg + '). Próxima reanudación: ' +
+          Utilities.formatDate(resetDate, 'America/Argentina/Buenos_Aires', 'yyyy-MM-dd HH:mm');
+        orqScheduleAt_(resetDate);
       }
     }
 
@@ -482,7 +590,9 @@ function orqTick() {
       return String(r[0]) === run.id && ['COMPLETADO', 'ERROR', 'OMITIDO'].indexOf(String(r[5])) >= 0;
     }).length + 1;
     run.cursor = doneCount;
-    run.mensaje = 'Fuente procesada: ' + source.name + ' (' + result.estado + ')';
+    if (run.estado === 'EJECUTANDO') {
+      run.mensaje = 'Fuente procesada: ' + source.name + ' (' + result.estado + ')';
+    }
 
     orqSaveRun_(run);
     orqUpdateRunRow_(ss, run);
@@ -515,7 +625,35 @@ function orqTick() {
   }
 }
 
-/** CONECTOR 1: YouTube por CANALES (descubrimiento reciente a nivel de canal) */
+function orqResume() {
+  var ss = orqDb_(), p = PropertiesService.getScriptProperties(), cfg = orqLoadConfig_();
+  var run = orqGetRun_();
+  if (run.estado !== 'PAUSADO_CUOTA') {
+    return { ok: false, estado: run.estado, mensaje: 'La corrida no está pausada por cuota.' };
+  }
+  var gcap = typeof checkGeminiQuota_ === 'function' ?
+    checkGeminiQuota_(p, { GEMINI_MAX_DAILY_CALLS: Number(cfg.GEMINI_MAX_DAILY_CALLS) || 20 }) : { allowed: true };
+  if (!gcap.allowed) {
+    return { ok: false, estado: run.estado, mensaje: 'La cuota de Gemini aún no se ha restablecido (' + (gcap.count || 0) + '/' + (gcap.max || 20) + ').' };
+  }
+  run.estado = 'EJECUTANDO';
+  run.mensaje = 'Reanudación forzada por el usuario.';
+  delete run.proximaReanudacion;
+  delete run.motivoPausa;
+
+  var shCola = orqSheet_(ss, 'OrqCola');
+  var cRows = orqRows_(shCola);
+  for (var ci = 0; ci < cRows.length; ci++) {
+    if (String(cRows[ci][0]) === run.id && String(cRows[ci][5]) === 'PAUSADO_CUOTA') {
+      shCola.getRange(ci + 2, 6, 1, 1).setValue('PENDIENTE');
+    }
+  }
+  orqSaveRun_(run);
+  orqUpdateRunRow_(ss, run);
+  orqTick();
+  return { ok: true, estado: 'EJECUTANDO', mensaje: 'Corrida reanudada.' };
+}
+
 function orqExecuteYouTube_(ss, run, source) {
   var tick = Date.now(), p = PropertiesService.getScriptProperties(), cfg = orqLoadConfig_();
   var ytKey = orqApiKey_('YOUTUBE_API_KEY');
@@ -546,7 +684,7 @@ function orqExecuteYouTube_(ss, run, source) {
         if (typeof recordYouTubeQuota_ === 'function') recordYouTubeQuota_(p, resolved.calls);
       }
     } catch(e) {
-      resolved = null;
+      resolved = { ok: false, error: String(e.message || e) };
     }
   }
 
@@ -558,37 +696,14 @@ function orqExecuteYouTube_(ss, run, source) {
       maxResults: maxComments
     });
     comments = stream.items || [];
-  } else if (/^[\w-]{11}$/.test(String(source.resourceId || source.videoId || '').trim())) {
-    var vid = String(source.resourceId || source.videoId || '').trim();
-    var vUrl = 'https://www.googleapis.com/youtube/v3/commentThreads?part=snippet&videoId=' +
-      encodeURIComponent(vid) + '&maxResults=' + maxComments +
-      '&order=time&textFormat=plainText&key=' + encodeURIComponent(ytKey);
-    res.youtube++;
-    if (typeof recordYouTubeQuota_ === 'function') recordYouTubeQuota_(p, 1);
-    var vRes = fetchFn(vUrl);
-    var vCode = vRes.getResponseCode();
-    if (vCode !== 200) {
-      throw new Error('YouTube HTTP ' + vCode);
-    }
-    var vData = JSON.parse(vRes.getContentText());
-    (vData.items || []).forEach(function(thread) {
-      var c = thread.snippet && thread.snippet.topLevelComment;
-      var sn = c && c.snippet;
-      if (c && sn && c.id) {
-        comments.push({
-          id: String(c.id),
-          sourceLabel: 'YouTube',
-          title: 'Comentario en ' + source.name,
-          text: String(sn.textOriginal || sn.textDisplay || '').slice(0, 580),
-          publishedAt: String(sn.publishedAt || ''),
-          url: 'https://www.youtube.com/watch?v=' + vid + '&lc=' + encodeURIComponent(c.id)
-        });
-      }
-    });
+    orqUpdateSourceState_(ss, source.id, 'OPERATIVA');
   } else {
+    // Si no se pudo resolver el canal a partir del enlace o video semilla, fallar explícitamente.
+    // NUNCA simular búsqueda del canal consultando un video fijo sin recencia.
     res.estado = 'ERROR_RESOLUCION';
     res.errores++;
-    res.mensaje = resolved && resolved.error ? resolved.error : 'No se pudo resolver canal ni video';
+    res.mensaje = resolved && resolved.error ? resolved.error : 'No se pudo resolver el canal a partir del recurso provisto';
+    orqUpdateSourceState_(ss, source.id, 'FALLO');
     orqRecordFuente_(ss, res);
     return res;
   }
@@ -667,7 +782,6 @@ function orqExecuteYouTube_(ss, run, source) {
   return res;
 }
 
-/** CONECTOR 2: Foros RSS/Atom (UTNianos y fuentes públicas autorizadas) */
 function orqExecuteRss_(ss, run, source) {
   var tick = Date.now(), p = PropertiesService.getScriptProperties(), cfg = orqLoadConfig_();
   var gemKey = orqApiKey_('GEMINI_API_KEY');
@@ -683,6 +797,7 @@ function orqExecuteRss_(ss, run, source) {
     res.estado = 'ERROR_URL_RSS';
     res.errores++;
     res.mensaje = 'Fuente RSS sin URL';
+    orqUpdateSourceState_(ss, source.id, 'FALLO');
     orqRecordFuente_(ss, res);
     return res;
   }
@@ -692,6 +807,7 @@ function orqExecuteRss_(ss, run, source) {
     res.estado = 'ERROR_HTTP_' + response.getResponseCode();
     res.errores++;
     res.mensaje = 'Fallo al consultar feed: HTTP ' + response.getResponseCode();
+    orqUpdateSourceState_(ss, source.id, 'FALLO');
     orqRecordFuente_(ss, res);
     return res;
   }
@@ -703,6 +819,7 @@ function orqExecuteRss_(ss, run, source) {
   if (!items.length) {
     res.estado = 'SIN_NOVEDADES';
     res.duracion = Math.round((Date.now() - tick) / 100) / 10;
+    orqUpdateSourceState_(ss, source.id, 'OPERATIVA');
     orqRecordFuente_(ss, res);
     return res;
   }
@@ -710,9 +827,10 @@ function orqExecuteRss_(ss, run, source) {
   // Filtrar publicaciones recientes (14 días) y con palabras clave de estudio/clases
   var now = Date.now(), windowMs = 14 * 86400000;
   var relevant = items.filter(function(it) {
-    var at = it.date ? new Date(it.date).getTime() : now;
+    var rawDate = it.publishedAt || it.date;
+    var at = rawDate ? new Date(rawDate).getTime() : now;
     if (now - at > windowMs) return false;
-    var txt = (it.title + ' ' + it.text).toLowerCase();
+    var txt = ((it.title || '') + ' ' + (it.text || '')).toLowerCase();
     return /clases|profesor|particular|parcial|final|ayuda|quimica|fisica|matematica|algebra|analisis/i.test(txt);
   });
 
@@ -725,52 +843,81 @@ function orqExecuteRss_(ss, run, source) {
     else unclassified.push(it);
   });
 
-  // Clasificar con Gemini si hay items relevantes
   var hallazgosRows = [];
-  if (unclassified.length > 0) {
-    var model = String(cfg.GEMINI_MODEL || 'gemini-3.5-flash-lite');
-    var batch = unclassified.slice(0, 5).map(function(it) {
-      return { id: it.computedId, sourceLabel: 'Foro RSS', title: it.title, text: it.text.slice(0, 500), url: it.url };
+  var model = String(cfg.GEMINI_MODEL || 'gemini-3.5-flash-lite');
+
+  // Procesar items en lotes de 5 sin descartar silenciosamente los restantes
+  for (var b = 0; b < unclassified.length; b += 5) {
+    var batch = unclassified.slice(b, b + 5).map(function(it) {
+      return { id: it.computedId, sourceLabel: 'Foro RSS', title: it.title, text: it.text.slice(0, 500), url: it.url, publishedAt: it.publishedAt || it.date };
     });
 
-    res.gemini++;
-    if (typeof recordGeminiCall_ === 'function') recordGeminiCall_(p);
+    var gcap = typeof checkGeminiQuota_ === 'function' ?
+      checkGeminiQuota_(p, { GEMINI_MAX_DAILY_CALLS: Number(cfg.GEMINI_MAX_DAILY_CALLS) || 20 }) : { allowed: true };
 
     var byId = {};
-    try { byId = orqCallGeminiBatch_(batch, model, gemKey); } catch(e) { res.errores++; }
+    if (gcap.allowed) {
+      res.gemini++;
+      if (typeof recordGeminiCall_ === 'function') recordGeminiCall_(p);
+      try {
+        byId = orqCallGeminiBatch_(batch, model, gemKey);
+      } catch(e) {
+        res.errores++;
+      }
+    }
 
     batch.forEach(function(it) {
       var r = byId[it.id] || null;
-      var intention = !!(r && r.es_solicitud_clases === true);
-      var candidate = !!(r && intention && r.destinatario === 'pedido_abierto' && r.oportunidad_comercial_alejo === true);
+      var intention = false, candidate = false;
       if (r) {
+        intention = !!(r.es_solicitud_clases === true);
+        candidate = !!(intention && r.destinatario === 'pedido_abierto' && r.oportunidad_comercial_alejo === true);
         res.clasificados++;
         if (intention) res.solicitudes++;
         if (candidate) res.candidatos++;
+      } else if (typeof evaluate === 'function') {
+        // Fallback a evaluación por reglas para no perder items
+        var ev = evaluate({ title: it.title, text: it.text, url: it.url, publishedAt: it.publishedAt, kind: 'tutoring' }, cfg, new Date(), {}, {});
+        intention = ev.status !== 'Descartado';
+        candidate = (ev.compatible === 'alta' || ev.compatible === 'media') && intention;
+        res.clasificados++;
+        if (intention) res.solicitudes++;
+        if (candidate) res.candidatos++;
+        r = {
+          destinatario: 'pedido_abierto',
+          contactabilidad: 'canal_publico_permitido',
+          materia: ev.subject || '',
+          nivel: '',
+          confianza: ev.score >= 5 ? 0.9 : 0.7,
+          resumen: ev.reasons || ''
+        };
       }
+
+      var pubStr = it.publishedAt ? new Date(it.publishedAt).toISOString() : new Date().toISOString();
       hallazgosRows.push([
         run.id, new Date(), 'Foros', source.name, it.id, it.url,
-        new Date().toISOString(), orqSafeText_(it.text), r ? String(intention) : 'SIN_CLASIFICAR',
+        pubStr, orqSafeText_(it.text), r ? String(intention) : 'SIN_CLASIFICAR',
         r ? r.destinatario : '', r ? r.contactabilidad : '', candidate ? 'REVISAR' : 'NO',
         r ? orqSafeText_(r.materia) : '', r ? orqSafeText_(r.nivel) : '',
         r ? r.confianza : '', r ? orqSafeText_(r.resumen) : ''
       ]);
     });
-
-    if (hallazgosRows.length) {
-      var shH = orqSheet_(ss, 'OrqHallazgos');
-      shH.getRange(shH.getLastRow() + 1, 1, hallazgosRows.length, 16).setValues(hallazgosRows);
-    }
   }
 
+  if (hallazgosRows.length) {
+    var shH = orqSheet_(ss, 'OrqHallazgos');
+    shH.getRange(shH.getLastRow() + 1, 1, hallazgosRows.length, 16).setValues(hallazgosRows);
+  }
+
+  orqUpdateSourceState_(ss, source.id, 'OPERATIVA');
   res.duracion = Math.round((Date.now() - tick) / 100) / 10;
   orqRecordFuente_(ss, res);
   return res;
 }
 
-/** CONECTOR 3: Alertas Gmail de plataformas docentes (Tusclases, Superprof, Google Alerts) */
 function orqExecuteGmail_(ss, run, source) {
-  var tick = Date.now(), cfg = orqLoadConfig_();
+  var tick = Date.now(), p = PropertiesService.getScriptProperties(), cfg = orqLoadConfig_();
+  var gemKey = orqApiKey_('GEMINI_API_KEY');
   var res = {
     runId: run.id, fecha: new Date(), fuenteId: source.id, nombre: source.name,
     conector: 'gmail_alertas', estado: 'OK', leidos: 0, repetidos: 0,
@@ -779,10 +926,35 @@ function orqExecuteGmail_(ss, run, source) {
   };
 
   try {
-    var query = 'from:(tusclases.com.ar OR superprof.es OR alert-noreply@google.com) newer_than:7d';
-    var threads = typeof GmailApp !== 'undefined' ? GmailApp.search(query, 0, 10) : [];
+    // Determinar consulta específica por fuente
+    var plat = String(source.platform || '').toLowerCase();
+    var name = String(source.name || '').toLowerCase();
+    var url = String(source.url || '').toLowerCase();
+    var query = 'newer_than:7d ';
+
+    if (plat.indexOf('tusclases') >= 0 || url.indexOf('tusclases') >= 0 || name.indexOf('tusclases') >= 0) {
+      query += 'from:(tusclases.com.ar OR tusclasesparticulares.com OR noreply@tusclases.com.ar)';
+      if (source.topics && /quimica|fisica|matematica|biologia/i.test(source.topics)) {
+        query += ' ' + source.topics.split(';')[0].trim();
+      }
+    } else if (plat.indexOf('superprof') >= 0 || url.indexOf('superprof') >= 0 || name.indexOf('superprof') >= 0) {
+      query += 'from:(superprof.com.ar OR superprof.es OR superprof.co OR superprof.com)';
+    } else if (name.indexOf('google alerts') >= 0 || name.indexOf('alertas') >= 0) {
+      query += 'from:alert-noreply@google.com';
+    } else {
+      query += 'from:(tusclases.com.ar OR superprof.com.ar OR alert-noreply@google.com)';
+    }
+
+    // Cachear hilos de Gmail en memoria del run para no re-consultar la misma query 20 veces
+    run._gmailCache = run._gmailCache || {};
+    var threads = run._gmailCache[query];
+    if (!threads) {
+      threads = typeof GmailApp !== 'undefined' ? GmailApp.search(query, 0, 15) : [];
+      run._gmailCache[query] = threads;
+    }
+
     var known = orqSeen_(ss);
-    var hallazgosRows = [];
+    var candidateItems = [];
 
     threads.forEach(function(th) {
       var msgs = th.getMessages();
@@ -798,37 +970,107 @@ function orqExecuteGmail_(ss, run, source) {
           html: m.getBody()
         };
         var extracted = typeof extractFromEmail === 'function' ? extractFromEmail(emailData, cfg) : { items: [] };
-        (extracted.items || []).forEach(function(it) {
-          var id = it.id || ('GMAIL-' + m.getId());
+
+        // Si el extractor descartó el correo (confirmación de aviso, no es solicitud, etc.), no crear candidatos falsos
+        if (extracted.ignored || !extracted.items || !extracted.items.length) {
+          return;
+        }
+
+        extracted.items.forEach(function(it) {
+          var id = it.id || ('GMAIL-' + orqHash_(it.url || (m.getId() + '_' + it.title)));
           if (known[id]) { res.repetidos++; return; }
-          res.clasificados++;
-          res.solicitudes++;
-          res.candidatos++;
-          var pubDateStr = it.publishedAt || '';
-          if (!pubDateStr && m.getDate) {
-            try {
-              var md = m.getDate();
-              pubDateStr = (md instanceof Date ? md : new Date(md)).toISOString();
-            } catch(e) { pubDateStr = new Date().toISOString(); }
+
+          // Evaluar calidad con evaluate() de Core.js
+          var ev = typeof evaluate === 'function' ?
+            evaluate(it, cfg, new Date(), {}, {}) : { compatible: 'media', status: 'Evaluado', score: 3 };
+
+          // Excluir descartes estrictos (avisos institucionales, materias fuera de perfil, etc.)
+          if (ev.status === 'Descartado' || ev.compatible === 'no') {
+            return;
           }
-          hallazgosRows.push([
-            run.id, new Date(), 'Gmail', source.name, id, it.url || ('https://mail.google.com/mail/#inbox/' + th.getId()),
-            pubDateStr || new Date().toISOString(), orqSafeText_(it.text || it.title),
-            'true', 'pedido_abierto', 'contacto_ofrecido_voluntariamente', 'REVISAR',
-            orqSafeText_(it.subject || ''), orqSafeText_(it.level || ''), 0.95, orqSafeText_(it.title || '')
-          ]);
+
+          it._computedId = id;
+          it._ev = ev;
+          candidateItems.push(it);
         });
       });
     });
+
+    // Clasificación con Gemini (si hay cuota) o regla validada de 4 dimensiones
+    var hallazgosRows = [];
+    var model = String(cfg.GEMINI_MODEL || 'gemini-3.5-flash-lite');
+
+    for (var b = 0; b < candidateItems.length; b += 5) {
+      var batch = candidateItems.slice(b, b + 5);
+      var gcap = typeof checkGeminiQuota_ === 'function' ?
+        checkGeminiQuota_(p, { GEMINI_MAX_DAILY_CALLS: Number(cfg.GEMINI_MAX_DAILY_CALLS) || 20 }) : { allowed: true };
+
+      var byId = {};
+      if (gcap.allowed) {
+        res.gemini++;
+        if (typeof recordGeminiCall_ === 'function') recordGeminiCall_(p);
+        try {
+          var gemBatch = batch.map(function(it){ return { id: it._computedId, sourceLabel: 'Gmail', title: it.title, text: (it.text || '').slice(0, 500), url: it.url }; });
+          byId = orqCallGeminiBatch_(gemBatch, model, gemKey);
+        } catch(e) {
+          res.errores++;
+        }
+      }
+
+      batch.forEach(function(it) {
+        var r = byId[it._computedId] || null;
+        var intention = false, candidate = false;
+
+        if (r) {
+          intention = !!(r.es_solicitud_clases === true);
+          candidate = !!(intention && r.destinatario === 'pedido_abierto' && r.oportunidad_comercial_alejo === true &&
+            ['canal_publico_permitido', 'contacto_ofrecido_voluntariamente'].indexOf(r.contactabilidad) >= 0);
+          res.clasificados++;
+          if (intention) res.solicitudes++;
+          if (candidate) res.candidatos++;
+        } else {
+          // Evaluación por motor determinista de Core.js
+          var ev = it._ev;
+          intention = true;
+          candidate = (ev.compatible === 'alta' || ev.compatible === 'media');
+          res.clasificados++;
+          res.solicitudes++;
+          if (candidate) res.candidatos++;
+          r = {
+            destinatario: 'pedido_abierto',
+            contactabilidad: 'contacto_ofrecido_voluntariamente',
+            materia: ev.subject || it.title || '',
+            nivel: it.level || '',
+            confianza: ev.score >= 5 ? 0.9 : 0.75,
+            resumen: ev.reasons || 'Solicitud de alumno extraída de alerta de plataforma docente'
+          };
+        }
+
+        var pubDateStr = '';
+        if (it.publishedAt) {
+          try { pubDateStr = new Date(it.publishedAt).toISOString(); } catch(e) {}
+        }
+        if (!pubDateStr) pubDateStr = new Date().toISOString();
+
+        hallazgosRows.push([
+          run.id, new Date(), 'Gmail', source.name, it._computedId, it.url || it.gmailLink,
+          pubDateStr, orqSafeText_(it.text || it.title),
+          String(intention), r.destinatario, r.contactabilidad, candidate ? 'REVISAR' : 'NO',
+          orqSafeText_(r.materia), orqSafeText_(r.nivel), r.confianza, orqSafeText_(r.resumen)
+        ]);
+      });
+    }
 
     if (hallazgosRows.length) {
       var shH = orqSheet_(ss, 'OrqHallazgos');
       shH.getRange(shH.getLastRow() + 1, 1, hallazgosRows.length, 16).setValues(hallazgosRows);
     }
+    orqUpdateSourceState_(ss, source.id, 'OPERATIVA');
   } catch(e) {
     res.errores++;
     res.estado = 'ERROR_GMAIL';
     res.mensaje = String(e && e.message || e).slice(0, 140);
+    orqUpdateSourceState_(ss, source.id, 'FALLO');
   }
 
   res.duracion = Math.round((Date.now() - tick) / 100) / 10;
@@ -836,7 +1078,6 @@ function orqExecuteGmail_(ss, run, source) {
   return res;
 }
 
-/** Invocación en lote a Gemini Flash-Lite con validación estricta de 4 dimensiones */
 function orqCallGeminiBatch_(batch, model, key) {
   var prompt = typeof buildGeminiPrompt === 'function' ? buildGeminiPrompt(batch) : JSON.stringify(batch);
   var url = 'https://generativelanguage.googleapis.com/v1beta/models/' +
@@ -962,9 +1203,11 @@ if (typeof module !== 'undefined') {
     orqStart: orqStart,
     orqStop: orqStop,
     orqTick: orqTick,
+    orqResume: orqResume,
     orqStatus: orqStatus,
     orqSources_: orqSources_,
     orqTotals_: orqTotals_,
+    orqSetSourceActive: orqSetSourceActive,
     orqSTAGING_ID: ORQ_STAGING_ID
   };
 }

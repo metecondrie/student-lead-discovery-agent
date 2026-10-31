@@ -330,6 +330,9 @@
       <button id="btnRefresh" class="btn btn-secondary" type="button" onclick="handleRefresh()">
         🔄 Consultar estado
       </button>
+      <button id="btnResume" class="btn btn-secondary" type="button" onclick="handleResume()" style="display:none; background:#fef3c7; color:#92400e; border:1px solid #fde68a; font-weight:700;">
+        ⚡ Reanudar corrida pausada
+      </button>
     </div>
 
     <div id="statusMessage" class="alert-error" role="alert"></div>
@@ -502,6 +505,7 @@
     $('btnStart').disabled = running || inFlight;
     $('btnStop').disabled = !running || inFlight;
     $('btnRefresh').disabled = inFlight;
+    if ($('btnResume')) $('btnResume').style.display = data.estado === 'PAUSADO_CUOTA' ? 'inline-flex' : 'none';
 
     // Header y progreso
     $('runIdLabel').textContent = data.id ? 'Corrida: ' + data.id : 'Sin corrida activa';
@@ -634,6 +638,24 @@
         setMessage(err && err.message ? err.message : 'Error al solicitar detención.');
       })
       .orqStop();
+  }
+
+  function handleResume() {
+    if (inFlight) return;
+    inFlight = true;
+    setMessage('Intentando reanudar búsqueda pausada...');
+    google.script.run
+      .withSuccessHandler(res => {
+        inFlight = false;
+        render(res);
+        setMessage(res.mensaje || '');
+      })
+      .withFailureHandler(err => {
+        inFlight = false;
+        setMessage(err && err.message ? err.message : 'Error al reanudar corrida.');
+        handleRefresh();
+      })
+      .orqResume();
   }
 
   function handleRefresh() {
