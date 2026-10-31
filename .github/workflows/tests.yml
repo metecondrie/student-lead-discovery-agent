@@ -1,7 +1,7 @@
 name: Node.js regression tests
 on:
   push:
-    branches: [main, 'develop/**']
+    branches: [main, 'develop/**', 'feature/**']
   pull_request:
     branches: [main]
 jobs:
