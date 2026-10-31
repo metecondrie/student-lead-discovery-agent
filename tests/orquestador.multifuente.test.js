@@ -556,3 +556,30 @@ test('9. Migración se limita a STAGING y preserva encabezados con tildes', () =
   const backup = env.sheets[result.backupHoja];
   assert.equal(backup.rows[0][13], 'Última revisión');
 });
+
+
+test('10. Auditoría RSS: fechas, sin fecha, palabras con tilde, contenido irrelevante y duplicados', () => {
+  const env = createMockEnv();
+  const now = new Date();
+  const today = new Date(now.getTime()-3600000);
+  env.ctx.parseRss = () => [
+    {title:'Necesito clases de Química',text:'Busco profe particular de Química',url:'https://foro.example/tema/1',publishedAt:today},
+    {title:'Consulta de matemáticas antigua',text:'Busco profesor particular',url:'https://foro.example/tema/2',publishedAt:new Date('2020-01-01T10:00:00Z')},
+    {title:'Ayuda con química',text:'Busco clases',url:'https://foro.example/tema/3',publishedAt:null},
+    {title:'Presentación de proyecto',text:'Hola, fotos de la jornada',url:'https://foro.example/tema/4',publishedAt:today}
+  ];
+  const status=env.ctx.orqStart(['RSS-01'],10);
+  assert.equal(status.estado,'FINALIZADO');
+  const audits=env.sheets.OrqAuditoria.rows.slice(1);
+  assert.equal(audits.length,4);
+  assert.equal(status.auditoria.enviados,1);
+  assert.equal(status.auditoria.descartados,3);
+  assert.equal(status.auditoria.motivos.FUERA_DE_VENTANA_14_DIAS,1);
+  assert.equal(status.auditoria.motivos.FECHA_DESCONOCIDA,1);
+  assert.equal(status.auditoria.motivos.SIN_PALABRAS_CLAVE,1);
+  assert.equal(env.sheets.OrqFuentes.rows[1][6],4);
+  assert.equal(env.sheets.OrqFuentes.rows[1][8],1);
+  assert.equal(env.sheets.OrqFuentes.rows[1][13],1);
+  env.ctx.orqStatus();
+  assert.equal(env.sheets.OrqAuditoria.rows.length,5);
+});
