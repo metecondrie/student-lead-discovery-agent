@@ -80,7 +80,15 @@
     </table></div>
   </section>
   <section class="panel">
-    <h2>4. Evolución diaria</h2>
+    <h2>4. Posibles alumnos para revisión humana</h2>
+    <div class="note">Solo mensajes abiertos con canal de contacto verificable según el clasificador. Revisá cada fuente antes de responder; ningún mensaje se envía automáticamente.</div>
+    <div class="scroller"><table>
+      <thead><tr><th>Fuente</th><th>Materia</th><th>Comentario / contexto</th><th>Enlace</th></tr></thead>
+      <tbody id="candidates"><tr><td colspan="4" class="empty">Todavía no hay candidatos.</td></tr></tbody>
+    </table></div>
+  </section>
+  <section class="panel">
+    <h2>5. Evolución diaria</h2>
     <div class="note">Cada día acumula sus corridas reales, aunque no hayan encontrado alumnos.</div>
     <div class="scroller"><table>
       <thead><tr><th>Fecha</th><th class="num">Corridas</th><th class="num">Leídos</th><th class="num">Clasificados</th><th class="num">Candidatos</th><th>Actividad</th></tr></thead>
@@ -123,6 +131,12 @@ function render(d){
     '</td><td class="num">'+x.clasificados+'</td><td class="num">'+x.candidatos+
     '</td><td class="num">'+x.errores+'</td></tr>'
   ).join('')||'<tr><td colspan="6" class="empty">Sin resultados todavía.</td></tr>';
+  $('candidates').innerHTML=(d.candidatos||[]).map(x=>
+    '<tr><td>'+esc(x.fuente)+'</td><td>'+esc(x.materia)+' · '+esc(x.nivel)+
+    '</td><td>'+esc(x.texto)+'</td><td><a target="_blank" rel="noopener noreferrer" href="'+
+    esc(/^https:\/\/www\.youtube\.com\/watch\?v=/.test(x.url)?x.url:'#')+
+    '">Ver comentario ↗</a></td></tr>'
+  ).join('')||'<tr><td colspan="4" class="empty">No se encontraron solicitudes abiertas aptas para revisión.</td></tr>';
   const hist=d.historial||[],max=Math.max(1,...hist.map(x=>x.leidos||0));
   $('dailyRows').innerHTML=hist.map(x=>
     '<tr><td>'+esc(x.fecha)+'</td><td class="num">'+x.corridas+'</td><td class="num">'+x.leidos+
