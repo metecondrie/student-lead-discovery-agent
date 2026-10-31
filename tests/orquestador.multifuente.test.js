@@ -535,3 +535,24 @@ test('7. Salvaguardas: aborta si no es STAGING, si SISTEMA_ACTIVO es TRUE o falt
     assert.equal(env.httpRequests.length, 0);
   }
 });
+
+
+test('9. Migración se limita a STAGING y preserva encabezados con tildes', () => {
+  const wrong = createMockEnv({ wrongSheet: true });
+  const countBefore = wrong.sheets.Fuentes.rows.length;
+  assert.throws(() => wrong.ctx.migrarCatalogoFuentesSeguro(), /STAGING|Seguridad/);
+  assert.equal(wrong.sheets.Fuentes.rows.length, countBefore);
+  assert.ok(!Object.keys(wrong.sheets).some(k => k.startsWith('Fuentes_Backup_')));
+
+  const env = createMockEnv();
+  env.sheets.Fuentes.rows[0].push('Última revisión');
+  env.sheets.Fuentes.rows.slice(1).forEach(r => r[13] = '2026-10-10');
+  const result = env.ctx.migrarCatalogoFuentesSeguro();
+  assert.equal(result.ok, true);
+  const first = env.sheets.Fuentes.rows.find(r => r[0] === 'YT-01');
+  assert.equal(first[13], '2026-10-10');
+  assert.equal(env.sheets.Fuentes.rows[0][13], 'Ultima revision');
+  assert.ok(result.backupHoja);
+  const backup = env.sheets[result.backupHoja];
+  assert.equal(backup.rows[0][13], 'Última revisión');
+});
