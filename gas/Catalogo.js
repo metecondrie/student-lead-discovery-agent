@@ -2682,10 +2682,150 @@ function importarCatalogoMaestro(opts) {
   return { total: rows.length, status: 'importado' };
 }
 
+
+/**
+ * Clasifica cualquier fuente según plataforma, tipo de acceso, prioridad, disponibilidad y conector.
+ * Usado por el orquestador y la reconciliación del catálogo maestro.
+ */
+function clasificarFuenteCatalogo(s) {
+  var url = String(s.url || '').toLowerCase();
+  var plat = String(s.plataforma || '').toLowerCase();
+  var creador = String(s.creador || '').toLowerCase();
+  var notas = String(s.notas || '');
+
+  var prioridad = 'P3';
+  if (/P0\b/i.test(notas)) prioridad = 'P0';
+  else if (/P1\b/i.test(notas)) prioridad = 'P1';
+  else if (/P2\b/i.test(notas)) prioridad = 'P2';
+
+  // 1. YouTube
+  if (plat === 'youtube' || url.indexOf('youtube.com') >= 0 || url.indexOf('youtu.be') >= 0) {
+    return {
+      tipoAcceso: 'api_oficial',
+      conector: 'youtube_canales',
+      disponibilidad: 'DISPONIBLE',
+      prioridad: prioridad,
+      motivoNoDisp: ''
+    };
+  }
+
+  // 2. RSS / Atom / Syndication (e.g. UTNianos RSS)
+  if (url.indexOf('syndication.php') >= 0 || url.indexOf('/rss') >= 0 || url.indexOf('/feed') >= 0 || url.endsWith('.xml') || creador.indexOf('rss') >= 0) {
+    return {
+      tipoAcceso: 'rss_publico',
+      conector: 'rss_foros',
+      disponibilidad: 'DISPONIBLE',
+      prioridad: prioridad,
+      motivoNoDisp: ''
+    };
+  }
+
+  // 3. Gmail: Tusclases, Superprof, Google Alerts (vía alertas docentes en correo)
+  if (plat === 'tusclases' || url.indexOf('tusclases.com') >= 0 || plat.indexOf('superprof') >= 0 || url.indexOf('superprof') >= 0 || creador.indexOf('alertas') >= 0 || creador.indexOf('google alerts') >= 0) {
+    return {
+      tipoAcceso: 'gmail_autorizado',
+      conector: 'gmail_alertas',
+      disponibilidad: 'DISPONIBLE',
+      prioridad: prioridad,
+      motivoNoDisp: ''
+    };
+  }
+
+  // 4. Plataformas con restricciones estrictas de términos de servicio / sin API pública autorizada
+  if (/facebook|instagram|tiktok|telegram|whatsapp|discord/.test(plat)) {
+    return {
+      tipoAcceso: 'no_automatizable',
+      conector: 'ninguno',
+      disponibilidad: 'NO_AUTOMATIZABLE',
+      prioridad: prioridad,
+      motivoNoDisp: 'Restricciones de CGU / Requiere API oficial verificada y tokens comerciales'
+    };
+  }
+
+  // 5. Reddit
+  if (plat === 'reddit' || url.indexOf('reddit.com') >= 0) {
+    return {
+      tipoAcceso: 'requiere_permiso',
+      conector: 'ninguno',
+      disponibilidad: 'REQUIERE_CONFIG',
+      prioridad: prioridad,
+      motivoNoDisp: 'Requiere registro OAuth y credenciales de desarrollador de Reddit'
+    };
+  }
+
+  // 6. Foros sin RSS público explícito / Directorios universitarios / Apuntes
+  return {
+    tipoAcceso: 'no_automatizable',
+    conector: 'ninguno',
+    disponibilidad: 'NO_AUTOMATIZABLE',
+    prioridad: prioridad,
+    motivoNoDisp: 'Punto de entrada informativo sin feed o conector automatizado autorizado'
+  };
+}
+
+/**
+ * Reconcilia e incorpora las 239 entradas del catálogo maestro a la hoja Fuentes.
+ * Preserva estrictamente los identificadores y registros preexistentes en STAGING.
+ */
+function sincronizarCatalogoFuentes(ss, opts) {
+  opts = opts || {};
+  var sh = ss.getSheetByName('Fuentes') || ss.insertSheet('Fuentes');
+  var headers = ['ID Fuente', 'Plataforma', 'Canal / Creador', 'Temas / Materias', 'Nivel / Universidad', 'URL Canal / Recurso', 'ID Recurso', 'Activo', 'Tipo Acceso', 'Prioridad', 'Disponibilidad', 'Conector', 'Notas'];
+  
+  if (sh.getLastRow() === 0) {
+    sh.getRange(1, 1, 1, headers.length).setValues([headers]);
+    sh.setFrozenRows(1);
+  }
+  
+  var existingRows = sh.getLastRow() > 1 ? sh.getRange(2, 1, sh.getLastRow() - 1, sh.getLastColumn()).getValues() : [];
+  var existingById = {}, existingByUrl = {};
+  existingRows.forEach(function(r) {
+    if (r[0]) existingById[String(r[0]).trim()] = r;
+    if (r[5]) existingByUrl[String(r[5]).trim().toLowerCase()] = r;
+  });
+
+  var toAppend = [];
+  MASTER_CATALOG_SOURCES.forEach(function(s) {
+    var id = String(s.id).trim();
+    var url = String(s.url || '').trim().toLowerCase();
+    if (existingById[id] || (url && existingByUrl[url])) {
+      return;
+    }
+    var c = clasificarFuenteCatalogo(s);
+    toAppend.push([
+      s.id,
+      s.plataforma,
+      s.creador,
+      s.materias,
+      s.nivel,
+      s.url,
+      s.resourceId || '',
+      false, // Activo = FALSE obligatorio
+      c.tipoAcceso,
+      c.prioridad,
+      c.disponibilidad,
+      c.conector,
+      s.notas || c.motivoNoDisp
+    ]);
+  });
+
+  if (toAppend.length > 0) {
+    sh.getRange(sh.getLastRow() + 1, 1, toAppend.length, headers.length).setValues(toAppend);
+  }
+
+  return {
+    preservados: existingRows.length,
+    agregados: toAppend.length,
+    total: existingRows.length + toAppend.length
+  };
+}
+
 if (typeof module !== 'undefined') {
   module.exports = {
     MASTER_CATALOG_SOURCES: MASTER_CATALOG_SOURCES,
     resolverConectorFuente: resolverConectorFuente,
-    importarCatalogoMaestro: importarCatalogoMaestro
+    importarCatalogoMaestro: importarCatalogoMaestro,
+    clasificarFuenteCatalogo: clasificarFuenteCatalogo,
+    sincronizarCatalogoFuentes: sincronizarCatalogoFuentes
   };
 }

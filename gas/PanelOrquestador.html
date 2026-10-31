@@ -1,0 +1,659 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <base target="_top">
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Centro de control — Captación de Alumnos</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #0f172a;
+      --muted: #475569;
+      --line: #cbd5e1;
+      --bg: #f8fafc;
+      --card: #ffffff;
+      --primary: #1d4ed8;
+      --primary-hover: #1e40af;
+      --green: #047857;
+      --green-bg: #ecfdf5;
+      --amber: #b45309;
+      --amber-bg: #fffbeb;
+      --red: #b91c1c;
+      --red-bg: #fef2f2;
+      --blue-bg: #eff6ff;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font: 14px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--ink);
+    }
+    .wrap {
+      max-width: 1120px;
+      margin: 0 auto;
+      padding: 24px 20px 80px;
+    }
+    .header {
+      display: flex;
+      justify-content: space-between;
+      gap: 16px;
+      align-items: center;
+      margin-bottom: 24px;
+      padding-bottom: 16px;
+      border-bottom: 1px solid var(--line);
+    }
+    h1 {
+      font-size: 24px;
+      font-weight: 800;
+      line-height: 1.2;
+      margin: 0 0 4px;
+      color: #0f172a;
+    }
+    .subtitle {
+      color: var(--muted);
+      font-size: 13px;
+    }
+    .badge {
+      display: inline-block;
+      padding: 6px 14px;
+      border-radius: 9999px;
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.02em;
+      text-transform: uppercase;
+      background: #e2e8f0;
+      color: #334155;
+    }
+    .badge.running { background: var(--blue-bg); color: var(--primary); border: 1px solid #bfdbfe; }
+    .badge.ok { background: var(--green-bg); color: var(--green); border: 1px solid #a7f3d0; }
+    .badge.err { background: var(--red-bg); color: var(--red); border: 1px solid #fecaca; }
+    .badge.paused { background: var(--amber-bg); color: var(--amber); border: 1px solid #fde68a; }
+
+    .card {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 20px;
+      margin-bottom: 20px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+    }
+    h2 {
+      font-size: 16px;
+      font-weight: 700;
+      margin: 0 0 12px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .desc {
+      color: var(--muted);
+      font-size: 13px;
+      margin: 0 0 16px;
+    }
+
+    .btn-row {
+      display: flex;
+      gap: 12px;
+      flex-wrap: wrap;
+      align-items: center;
+      margin-top: 14px;
+    }
+    .btn {
+      padding: 12px 22px;
+      border-radius: 8px;
+      border: 0;
+      font-weight: 700;
+      font-size: 14px;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      transition: all 0.15s ease;
+    }
+    .btn-primary {
+      background: var(--primary);
+      color: #ffffff;
+      box-shadow: 0 2px 4px rgba(29, 78, 216, 0.25);
+    }
+    .btn-primary:hover:not(:disabled) {
+      background: var(--primary-hover);
+    }
+    .btn-secondary {
+      background: #e2e8f0;
+      color: #1e293b;
+    }
+    .btn-secondary:hover:not(:disabled) {
+      background: #cbd5e1;
+    }
+    .btn-danger {
+      background: var(--red-bg);
+      color: var(--red);
+      border: 1px solid #fecaca;
+    }
+    .btn-danger:hover:not(:disabled) {
+      background: #fee2e2;
+    }
+    .btn:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
+    .controls-grid {
+      display: grid;
+      grid-template-columns: auto 1fr;
+      gap: 16px;
+      align-items: center;
+      background: #f1f5f9;
+      padding: 14px 18px;
+      border-radius: 8px;
+      margin-bottom: 14px;
+    }
+    .switch-label {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-weight: 600;
+      cursor: pointer;
+      user-select: none;
+    }
+    .switch-label input[type="checkbox"] {
+      width: 18px;
+      height: 18px;
+      accent-color: var(--primary);
+      cursor: pointer;
+    }
+
+    .progress-bar {
+      height: 12px;
+      background: #e2e8f0;
+      border-radius: 9999px;
+      overflow: hidden;
+      margin: 12px 0 6px;
+    }
+    .progress-fill {
+      height: 100%;
+      width: 0%;
+      background: var(--primary);
+      transition: width 0.3s ease;
+    }
+
+    .grid-metrics {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 14px;
+      margin: 16px 0;
+    }
+    .metric-card {
+      background: #f8fafc;
+      border: 1px solid #e2e8f0;
+      border-radius: 10px;
+      padding: 14px;
+    }
+    .metric-num {
+      font-size: 26px;
+      font-weight: 800;
+      color: #0f172a;
+      line-height: 1;
+      margin-bottom: 4px;
+    }
+    .metric-label {
+      font-size: 12px;
+      color: var(--muted);
+      font-weight: 600;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+    th, td {
+      padding: 10px 12px;
+      text-align: left;
+      border-bottom: 1px solid #e2e8f0;
+    }
+    th {
+      font-size: 11px;
+      font-weight: 700;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      background: #f8fafc;
+    }
+    td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+    .table-container {
+      overflow-x: auto;
+      border-radius: 8px;
+      border: 1px solid #e2e8f0;
+    }
+
+    .tag {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 6px;
+      font-size: 11px;
+      font-weight: 600;
+    }
+    .tag-yt { background: #fee2e2; color: #991b1b; }
+    .tag-rss { background: #fef3c7; color: #92400e; }
+    .tag-gmail { background: #e0e7ff; color: #3730a3; }
+    .tag-neutral { background: #f1f5f9; color: #475569; }
+
+    .notice {
+      background: var(--amber-bg);
+      border-left: 4px solid var(--amber);
+      color: #78350f;
+      padding: 12px 16px;
+      border-radius: 0 8px 8px 0;
+      font-size: 13px;
+      margin-top: 14px;
+    }
+    .alert-error {
+      color: var(--red);
+      font-weight: 600;
+      font-size: 13px;
+      margin-top: 8px;
+      min-height: 18px;
+    }
+    a.action-link {
+      color: var(--primary);
+      text-decoration: none;
+      font-weight: 600;
+    }
+    a.action-link:hover { text-decoration: underline; }
+
+    .catalog-summary-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 12px;
+      margin-top: 10px;
+    }
+    .catalog-box {
+      padding: 12px;
+      border-radius: 8px;
+      background: #f8fafc;
+      border: 1px solid #e2e8f0;
+    }
+    .catalog-box b { display: block; font-size: 15px; margin-bottom: 2px; }
+    .catalog-box span { font-size: 12px; color: var(--muted); }
+
+    @media (max-width: 768px) {
+      .grid-metrics { grid-template-columns: repeat(2, 1fr); }
+      .catalog-summary-grid { grid-template-columns: 1fr; }
+      .header { flex-direction: column; align-items: flex-start; }
+    }
+  </style>
+</head>
+<body>
+<div class="wrap">
+
+  <!-- Encabezado Principal -->
+  <header class="header">
+    <div>
+      <h1>Captación de Alumnos · Centro de Control</h1>
+      <div class="subtitle">Buscador multifuente autónomo · STAGING · Cero contacto a alumnos</div>
+    </div>
+    <div>
+      <span id="runBadge" class="badge">Conectando…</span>
+    </div>
+  </header>
+
+  <!-- 1. Acción Principal de Búsqueda -->
+  <section class="card">
+    <h2>1. Búsqueda de alumnos multifuente</h2>
+    <p class="desc">Un único botón para activar la búsqueda en todas las fuentes operativas habilitadas (YouTube Canales, Foros RSS y Alertas docentes en Gmail). El proceso se reanuda de forma autónoma mediante triggers aunque cierres el navegador.</p>
+
+    <div class="controls-grid">
+      <label class="switch-label">
+        <input type="checkbox" id="runAllEnabled" checked>
+        <span>Recorrer todas las fuentes operativas habilitadas</span>
+      </label>
+      <div style="display:flex; gap:10px; align-items:center; justify-content:flex-end;">
+        <label for="maxComments" style="font-size:13px; font-weight:600;">Máx. items por fuente:</label>
+        <select id="maxComments" style="padding:6px 10px; border-radius:6px; border:1px solid #cbd5e1;">
+          <option value="10">10 items</option>
+          <option value="15" selected>15 items</option>
+          <option value="20">20 items</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="btn-row">
+      <button id="btnStart" class="btn btn-primary" type="button" onclick="handleStart()">
+        ▶ Buscar alumnos
+      </button>
+      <button id="btnStop" class="btn btn-danger" type="button" onclick="handleStop()" disabled>
+        ⏹ Detener
+      </button>
+      <button id="btnRefresh" class="btn btn-secondary" type="button" onclick="handleRefresh()">
+        🔄 Consultar estado
+      </button>
+    </div>
+
+    <div id="statusMessage" class="alert-error" role="alert"></div>
+
+    <div class="notice">
+      <strong>Transparencia de fuentes:</strong> Las plataformas sin API autorizada (Facebook Groups, Reels de Instagram ajenos, TikTok y Reddit sin clave) permanecen registradas en el catálogo maestro (239 entradas), pero <strong>no se simulan búsquedas falsas</strong> en ellas para no violar sus condiciones de uso.
+    </div>
+  </section>
+
+  <!-- 2. Estado de la Ejecución y Métricas -->
+  <section class="card">
+    <h2>2. Progreso y métricas en vivo</h2>
+    <div style="display:flex; justify-content:space-between; align-items:center; font-size:13px; color:var(--muted);">
+      <span id="runIdLabel">Sin corrida activa.</span>
+      <span id="stepCounter">—</span>
+    </div>
+
+    <div class="progress-bar" aria-label="Progreso">
+      <div id="progressBarFill" class="progress-fill"></div>
+    </div>
+    <div id="stepDetail" style="font-size:13px; color:var(--muted); margin-top:6px;">—</div>
+
+    <div class="grid-metrics">
+      <div class="metric-card">
+        <div id="valLeidos" class="metric-num">0</div>
+        <div class="metric-label">Comentarios / Avisos leídos</div>
+      </div>
+      <div class="metric-card">
+        <div id="valClasificados" class="metric-num">0</div>
+        <div class="metric-label">Clasificados por Gemini</div>
+      </div>
+      <div class="metric-card">
+        <div id="valCandidatos" class="metric-num" style="color:var(--green);">0</div>
+        <div class="metric-label">Candidatos para revisión</div>
+      </div>
+      <div class="metric-card">
+        <div id="valErrores" class="metric-num" style="color:var(--red);">0</div>
+        <div class="metric-label">Errores / Alertas</div>
+      </div>
+    </div>
+
+    <div id="apiTelemetry" style="font-size:12px; color:var(--muted);">
+      YouTube API: 0 llamadas · Gemini API: 0 llamadas · Repetidos omitidos: 0
+    </div>
+  </section>
+
+  <!-- 3. Candidatos Detectados para Revisión Humana -->
+  <section class="card">
+    <h2>3. Solicitudes de alumnos detectadas (revisión humana obligatoria)</h2>
+    <p class="desc">Mensajes reales clasificados con intención de clases, pedido abierto y vía de contacto permitida. Ningún mensaje se envía automáticamente.</p>
+
+    <div class="table-container">
+      <table>
+        <thead>
+          <tr>
+            <th>Plataforma</th>
+            <th>Fuente</th>
+            <th>Materia / Nivel</th>
+            <th>Consulta / Comentario</th>
+            <th>Confianza</th>
+            <th>Enlace original</th>
+          </tr>
+        </thead>
+        <tbody id="candidatesTableBody">
+          <tr><td colspan="6" style="text-align:center; color:var(--muted); padding:20px;">Todavía no se encontraron candidatos calificados en esta corrida.</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- 4. Detalle por Fuente Operativa en la Corrida -->
+  <section class="card">
+    <h2>4. Progreso por fuente operativa</h2>
+    <p class="desc">Estado de cada fuente procesada en la cola de trabajo persistente (OrqCola).</p>
+
+    <div class="table-container">
+      <table>
+        <thead>
+          <tr>
+            <th>Fuente</th>
+            <th>Conector</th>
+            <th>Estado</th>
+            <th class="num">Leídos</th>
+            <th class="num">Clasificados</th>
+            <th class="num">Candidatos</th>
+            <th class="num">Errores</th>
+            <th class="num">Duración</th>
+          </tr>
+        </thead>
+        <tbody id="sourcesTableBody">
+          <tr><td colspan="8" style="text-align:center; color:var(--muted); padding:20px;">Sin datos de fuentes todavía.</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- 5. Resumen del Catálogo Maestro y Fuentes No Automatizables -->
+  <section class="card">
+    <h2>5. Catálogo central y fuentes no automatizables (239 entradas)</h2>
+    <p class="desc">Clasificación de todas las fuentes registradas según su viabilidad técnica y regulatoria.</p>
+
+    <div class="catalog-summary-grid">
+      <div class="catalog-box">
+        <b id="catOperativas" style="color:var(--green);">0 fuentes</b>
+        <span>Operativas con conector funcional (YouTube Canales, Foros RSS, Gmail Alertas).</span>
+      </div>
+      <div class="catalog-box">
+        <b id="catNoAuto" style="color:var(--amber);">0 fuentes</b>
+        <span>No automatizables (Facebook, Instagram, TikTok, Discord, Telegram sin API de comentarios de terceros).</span>
+      </div>
+      <div class="catalog-box">
+        <b id="catReqConfig" style="color:var(--primary);">0 fuentes</b>
+        <span>Requieren credenciales oficiales de desarrollador (Reddit OAuth).</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- 6. Historial Diario -->
+  <section class="card">
+    <h2>6. Historial y evolución diaria</h2>
+    <div class="table-container">
+      <table>
+        <thead>
+          <tr>
+            <th>Fecha</th>
+            <th class="num">Corridas</th>
+            <th class="num">Leídos</th>
+            <th class="num">Clasificados</th>
+            <th class="num">Candidatos</th>
+            <th class="num">Errores</th>
+          </tr>
+        </thead>
+        <tbody id="historyTableBody">
+          <tr><td colspan="6" style="text-align:center; color:var(--muted); padding:20px;">El historial diario se registrará tras completar la primera búsqueda.</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p style="margin-top:14px; font-size:13px;">
+      <a id="sheetLink" class="action-link" href="#" target="_blank" rel="noopener noreferrer">Abrir planilla Google Sheets de resultados ↗</a>
+    </p>
+  </section>
+
+</div>
+
+<script>
+  let inFlight = false;
+  const $ = id => document.getElementById(id);
+  const esc = str => String(str == null ? '' : str).replace(/[&<>"']/g, c => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+  }[c]));
+
+  function setMessage(msg) {
+    $('statusMessage').textContent = msg || '';
+  }
+
+  function render(data) {
+    if (!data) return;
+    const running = data.estado === 'EJECUTANDO';
+
+    // Badge
+    $('runBadge').textContent = data.estado || 'INACTIVO';
+    $('runBadge').className = 'badge ' + (
+      running ? 'running' :
+      data.estado === 'FINALIZADO' ? 'ok' :
+      data.estado === 'ERROR' ? 'err' :
+      data.estado === 'PAUSADO_CUOTA' ? 'paused' : ''
+    );
+
+    // Botones
+    $('btnStart').disabled = running || inFlight;
+    $('btnStop').disabled = !running || inFlight;
+    $('btnRefresh').disabled = inFlight;
+
+    // Header y progreso
+    $('runIdLabel').textContent = data.id ? 'Corrida: ' + data.id : 'Sin corrida activa';
+    const total = data.total || 0;
+    const cursor = data.cursor || 0;
+    const pct = total > 0 ? Math.min(100, Math.round(100 * cursor / total)) : 0;
+    $('progressBarFill').style.width = pct + '%';
+    $('stepCounter').textContent = cursor + ' / ' + total + ' fuentes procesadas (' + pct + '%)';
+    $('stepDetail').textContent = data.mensaje || '';
+
+    // Métricas
+    const m = data.metricas || {};
+    $('valLeidos').textContent = m.leidos || 0;
+    $('valClasificados').textContent = m.clasificados || 0;
+    $('valCandidatos').textContent = m.candidatos || 0;
+    $('valErrores').textContent = m.errores || 0;
+    $('apiTelemetry').textContent =
+      'YouTube API: ' + (m.youtube || 0) + ' solicitudes · Gemini API: ' + (m.gemini || 0) +
+      ' llamadas · Repetidos omitidos: ' + (m.repetidos || 0);
+
+    // Tabla de Candidatos
+    const candidates = data.candidatos || [];
+    if (!candidates.length) {
+      $('candidatesTableBody').innerHTML =
+        '<tr><td colspan="6" style="text-align:center; color:var(--muted); padding:20px;">' +
+        (running ? 'Buscando candidatos calificados en comentarios recientes…' : 'No se encontraron solicitudes abiertas aptas para revisión en esta corrida.') +
+        '</td></tr>';
+    } else {
+      $('candidatesTableBody').innerHTML = candidates.map(c => {
+        const platTag = c.plataforma === 'YouTube' ? 'tag-yt' : c.plataforma === 'Gmail' ? 'tag-gmail' : 'tag-rss';
+        const urlValid = /^https?:\/\//i.test(c.url);
+        return '<tr>' +
+          '<td><span class="tag ' + platTag + '">' + esc(c.plataforma) + '</span></td>' +
+          '<td><b>' + esc(c.fuente) + '</b></td>' +
+          '<td>' + esc(c.materia) + (c.nivel ? ' · ' + esc(c.nivel) : '') + '</td>' +
+          '<td>' + esc(c.texto) + '</td>' +
+          '<td>' + (c.confianza ? Math.round(Number(c.confianza) * 100) + '%' : '—') + '</td>' +
+          '<td>' + (urlValid ? '<a class="action-link" href="' + esc(c.url) + '" target="_blank" rel="noopener noreferrer">Ver original ↗</a>' : '—') + '</td>' +
+          '</tr>';
+      }).join('');
+    }
+
+    // Tabla de Fuentes procesadas
+    const details = (m && m.detalles) || [];
+    if (!details.length) {
+      $('sourcesTableBody').innerHTML =
+        '<tr><td colspan="8" style="text-align:center; color:var(--muted); padding:20px;">Sin fuentes procesadas en esta corrida todavía.</td></tr>';
+    } else {
+      $('sourcesTableBody').innerHTML = details.map(d => {
+        const connTag = d.conector === 'youtube_canales' ? 'tag-yt' : d.conector === 'gmail_alertas' ? 'tag-gmail' : 'tag-rss';
+        const isOk = d.estado === 'OK';
+        return '<tr>' +
+          '<td><b>' + esc(d.nombre) + '</b></td>' +
+          '<td><span class="tag ' + connTag + '">' + esc(d.conector) + '</span></td>' +
+          '<td><span style="font-weight:600; color:' + (isOk ? 'var(--green)' : 'var(--red)') + ';">' + esc(d.estado) + '</span></td>' +
+          '<td class="num">' + (d.leidos || 0) + '</td>' +
+          '<td class="num">' + (d.clasificados || 0) + '</td>' +
+          '<td class="num" style="font-weight:700; color:var(--green);">' + (d.candidatos || 0) + '</td>' +
+          '<td class="num" style="color:var(--red);">' + (d.errores || 0) + '</td>' +
+          '<td class="num">' + (d.duracion || 0) + 's</td>' +
+          '</tr>';
+      }).join('');
+    }
+
+    // Catálogo Resumen
+    const cat = data.catalogoResumen || {};
+    $('catOperativas').textContent = (cat.operativas || 0) + ' fuentes operativas';
+    $('catNoAuto').textContent = (cat.noAutomatizables || 0) + ' no automatizables';
+    $('catReqConfig').textContent = (cat.plataformas && cat.plataformas['Reddit'] ? cat.plataformas['Reddit'] : 30) + ' requieren config';
+
+    // Historial Diario
+    const hist = data.historial || [];
+    if (!hist.length) {
+      $('historyTableBody').innerHTML =
+        '<tr><td colspan="6" style="text-align:center; color:var(--muted); padding:20px;">Sin historial de corridas en días anteriores.</td></tr>';
+    } else {
+      $('historyTableBody').innerHTML = hist.map(h => {
+        return '<tr>' +
+          '<td><b>' + esc(h.fecha) + '</b></td>' +
+          '<td class="num">' + h.corridas + '</td>' +
+          '<td class="num">' + h.leidos + '</td>' +
+          '<td class="num">' + h.clasificados + '</td>' +
+          '<td class="num" style="font-weight:700; color:var(--green);">' + h.candidatos + '</td>' +
+          '<td class="num" style="color:var(--red);">' + h.errores + '</td>' +
+          '</tr>';
+      }).join('');
+    }
+
+    // Enlace a planilla
+    if (data.link) $('sheetLink').href = data.link;
+  }
+
+  function handleStart() {
+    if (inFlight) return;
+    inFlight = true;
+    setMessage('Iniciando búsqueda multifuente… El primer paso se procesa ahora.');
+    $('btnStart').disabled = true;
+
+    const maxCount = Number($('maxComments').value) || 15;
+    const sourceMode = $('runAllEnabled').checked ? 'ALL_ENABLED' : [];
+
+    google.script.run
+      .withSuccessHandler(res => {
+        inFlight = false;
+        render(res);
+        setMessage('');
+      })
+      .withFailureHandler(err => {
+        inFlight = false;
+        setMessage(err && err.message ? err.message : 'Error al iniciar la búsqueda.');
+        handleRefresh();
+      })
+      .orqStart(sourceMode, maxCount);
+  }
+
+  function handleStop() {
+    if (inFlight) return;
+    inFlight = true;
+    $('btnStop').disabled = true;
+    setMessage('Enviando solicitud de detención…');
+
+    google.script.run
+      .withSuccessHandler(res => {
+        inFlight = false;
+        setMessage(res.mensaje || 'Detención solicitada.');
+        handleRefresh();
+      })
+      .withFailureHandler(err => {
+        inFlight = false;
+        setMessage(err && err.message ? err.message : 'Error al solicitar detención.');
+      })
+      .orqStop();
+  }
+
+  function handleRefresh() {
+    if (inFlight) return;
+    google.script.run
+      .withSuccessHandler(res => {
+        render(res);
+        setMessage('');
+      })
+      .withFailureHandler(err => {
+        setMessage(err && err.message ? err.message : 'Error al consultar el estado.');
+      })
+      .orqStatus();
+  }
+
+  // Consulta inicial y actualización periódica
+  handleRefresh();
+  setInterval(() => {
+    if (!inFlight) handleRefresh();
+  }, 10000);
+</script>
+</body>
+</html>
