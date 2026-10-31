@@ -106,9 +106,9 @@ function pilotoYouTubeReal() {
     if (qualified) accepted++;
     return [
       start,id,'YouTube',VIDEO_ID,it.id,it.url,it.publishedAt,
-      pilotoYTOcultarDatos_(it.text),r?String(r.es_solicitud_clases):'Sin clasificar',
+      sanitizarPilotoYT_(it.text),r?String(r.es_solicitud_clases):'Sin clasificar',
       r?r.destinatario:'',r?r.contactabilidad:'',qualified?'CANDIDATO - revisión humana':'NO',
-      r?r.confianza:'',r?r.materia:'',r?pilotoYTOcultarDatos_(r.resumen):'',
+      r?r.confianza:'',r?sanitizarPilotoYT_(r.materia):'',r?sanitizarPilotoYT_(r.resumen):'',
       r?'Clasificado':'Sin respuesta',Math.round((new Date()-start)/100)/10
     ];
   });
@@ -146,7 +146,8 @@ function pilotoYouTubeReal() {
   Logger.log('Piloto completado. 1 llamada YouTube + 1 llamada Gemini. 0 mensajes enviados.');
   return result;
 }
-function pilotoYTOcultarDatos_(text) {
-  return String(text || '').replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi,'[email oculto]')
+function sanitizarPilotoYT_(text) {
+  var clean = String(text || '').replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi,'[email oculto]')
     .replace(/(?:\+?\d[\d\s().-]{8,}\d)/g,'[telefono oculto]').slice(0,650);
+  return sanitizeForSheets(clean);
 }
