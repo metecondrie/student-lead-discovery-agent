@@ -450,7 +450,16 @@
     </div>
   </section>
 
-  <!-- 6. Historial Diario -->
+  <!-- 6. Auditoría de descartes -->
+  <section class="card" id="auditoria">
+    <h2>6. ¿Por qué se descartaron publicaciones?</h2>
+    <p class="desc">La auditoría registra los filtros anteriores a Gemini. Sirve para distinguir «no había alumnos» de «no se analizaron las publicaciones». No guarda aquí el texto íntegro de los descartados.</p>
+    <div id="auditSummary" class="desc">Sin auditoría disponible para esta corrida.</div>
+    <div id="auditReasons" class="desc"></div>
+    <p class="desc">Para auditar un caso individual, abrí la pestaña <b>OrqAuditoria</b> de Google Sheets. Las primeras corridas no disponen de este registro.</p>
+  </section>
+
+    <!-- 7. Historial Diario -->
   <section class="card">
     <h2>6. Historial y evolución diaria</h2>
     <div class="table-container">
@@ -473,6 +482,24 @@
     <p style="margin-top:14px; font-size:13px;">
       <a id="sheetLink" class="action-link" href="#" target="_blank" rel="noopener noreferrer">Abrir planilla Google Sheets de resultados ↗</a>
     </p>
+  </section>
+
+  <!-- Manual de uso integrado -->
+  <section class="card" id="manual">
+    <details>
+      <summary style="cursor:pointer; font-weight:700; font-size:16px;">Ayuda: cómo usar el centro de control</summary>
+      <div style="padding-top:12px; line-height:1.65;">
+        <p><b>Buscar alumnos:</b> inicia una corrida en todas las fuentes expresamente habilitadas. Nunca envía mensajes.</p>
+        <p><b>Detener:</b> solicita cancelar trabajos restantes. Si aparece gris, no hay corrida activa.</p>
+        <p><b>Consultar estado:</b> refresca los indicadores, igual que la actualización automática cada diez segundos.</p>
+        <p><b>Reanudar:</b> aparece cuando la corrida está pausada por cuota. Solo funciona si ya se recuperaron los límites aplicables.</p>
+        <p><b>Máximo de ítems:</b> limita la consulta por fuente; no es el número de alumnos que encontrará.</p>
+        <p><b>100 % y FINALIZADO:</b> terminó de procesar la cola. No significa que encontró alumnos ni que analizó todo el catálogo de 239 fuentes.</p>
+        <p><b>Leídos:</b> mensajes obtenidos. <b>Clasificados:</b> los que llegaron al clasificador. <b>Candidatos:</b> pedidos para revisar. <b>Descartados:</b> textos excluidos por fecha, relevancia o repetición.</p>
+        <p>Las plataformas sin conectores autorizados se registran en el catálogo pero no se consultan. Las fuentes se habilitan en la columna <b>Activo</b> de la hoja <b>Fuentes</b>.</p>
+        <p>Consultá el documento completo de uso en el repositorio del proyecto o las pestañas <b>OrqCorridas</b>, <b>OrqCola</b>, <b>OrqFuentes</b>, <b>OrqHallazgos</b> y <b>OrqAuditoria</b> en Sheets.</p>
+      </div>
+    </details>
   </section>
 
 </div>
@@ -525,6 +552,16 @@
     $('apiTelemetry').textContent =
       'YouTube API: ' + (m.youtube || 0) + ' solicitudes · Gemini API: ' + (m.gemini || 0) +
       ' llamadas · Repetidos omitidos: ' + (m.repetidos || 0);
+    // Razones efectivas de filtrado de la corrida actual
+    const audit = data.auditoria || {};
+    $('auditSummary').textContent =
+      (audit.total || 0) + ' registros auditados · ' + (audit.descartados || 0) +
+      ' descartados · ' + (audit.enviados || 0) + ' enviados a clasificación.';
+    const auditReasons = Object.entries(audit.motivos || {}).sort((a,b)=>b[1]-a[1]);
+    $('auditReasons').innerHTML = auditReasons.length
+      ? '<ul style="margin:8px 0 0 20px;">' + auditReasons.map(([reason,count])=>
+          '<li>' + esc(reason.replaceAll('_',' ')) + ': ' + count + '</li>').join('') + '</ul>'
+      : '<span style="color:var(--muted);">Sin descartes registrados.</span>';
 
     // Tabla de Candidatos
     const candidates = data.candidatos || [];
