@@ -668,7 +668,9 @@ function assessContactability(it, directInquiry) {
   var social = /youtube|tiktok|instagram|facebook|reddit|telegram|discord|twitter|\bx\b|foro|utnianos/.test(platform);
   var addressedToCreator = /(?:^|\n|[.!?]\s*)(?:hola[,! ]*)?(?:profe|profesor|profesora|maestro|maestra)[,! ]+(?:vos|tu|usted|das|dictas|cobras|haces|ensenas|podrias)/.test(text) ||
     /(?:\b(?:vos|tu|usted)\s+)?(?:das|dictas|cobras)\s+clases\s+particulares/.test(text) ||
-    /(?:cuanto|que)\s+cobras\s+(?:por\s+)?(?:la\s+)?clase/.test(text);
+    /(?:cuanto|que)\s+cobras\s+(?:por\s+)?(?:la\s+)?clase/.test(text) ||
+    /(?:estudiar|aprender|tener clases|tomar clases)\s+(?:con\s+vos|con\s+usted|contigo)/.test(text) ||
+    /(?:me\s+gustar[ií]a|quisiera|quiero)\s+(?:estudiar|aprender|tener clases|tomar clases)\s+con\s+(?:vos|usted)/.test(text);
   var openRequest = /(?:\bbusco\s+(?:un[a]?\s+)?(?:profe|profesor|profesora|docente|tutor)|\bnecesito\s+(?:un[a]?\s+)?(?:profe|profesor|profesora|docente|tutor)|\balguien\s+(?:conoce|recomienda|da|que\s+de)|\bconocen\s+(?:un[a]?\s+)?(?:profe|profesor)|\brecomiendan\s+(?:un[a]?\s+)?(?:profe|profesor)|\balgun\s+(?:profe|profesor)\b)/.test(text);
   if (directInquiry) return { label: 'Contacto en plataforma', via: 'Responder a consulta entrante en plataforma', action: 'Revisar mensaje recibido y responder manualmente', notify: true, reachable: true };
   if (!url) return { label: 'Sin vía de contacto', via: '', action: 'Sin enlace verificable; no enviar oferta', notify: false, reachable: false };
@@ -1003,17 +1005,48 @@ function buildDigest(st, cfg) {
 
 /* ---------- Clasificador Gemini Flash-Lite (lógica pura) ---------- */
 function buildGeminiPrompt(items) {
-  var schemaDesc = 'Devuelve un JSON estrictamente válido, sin bloques de markdown adicionales ni texto introductorio, con un array de objetos con el siguiente esquema:\n' +
-    '[{"id": string, "es_solicitud_clases": boolean, "materia": string, "nivel": string, "urgencia": "alta"|"media"|"baja"|"ninguna", "confianza": number, "resumen": string}]';
-  var prompt = 'Actuá como clasificador de solicitudes de clases particulares para un profesor de Matemática, Física, Química, Biofísica y afines en Argentina.\n' +
-    'Para cada elemento, determiná si la persona busca o necesita contratar/tomar clases particulares (es_solicitud_clases = true), o si se trata de consultas puntuales del video, agradecimientos, spam o venta de material (es_solicitud_clases = false).\n\n' +
+  var schemaDesc = 'Devuelve un JSON estrictamente válido, sin bloques de markdown adicionales ni texto introductorio, con un array de objetos con el siguiente esquema exacto:\n' +
+    '[\n' +
+    '  {\n' +
+    '    "id": string,\n' +
+    '    "es_solicitud_clases": boolean,\n' +
+    '    "destinatario": "pedido_abierto" | "dirigido_al_creador" | "dirigido_a_otro_docente" | "ambiguo" | "desconocido",\n' +
+    '    "contactabilidad": "canal_publico_permitido" | "contacto_ofrecido_voluntariamente" | "via_inexistente" | "no_verificada",\n' +
+    '    "oportunidad_comercial_alejo": boolean,\n' +
+    '    "materia": string,\n' +
+    '    "nivel": string,\n' +
+    '    "urgencia": "alta" | "media" | "baja" | "ninguna",\n' +
+    '    "confianza": number,\n' +
+    '    "resumen": string\n' +
+    '  }\n' +
+    ']';
+  var prompt = 'Actuá como clasificador de oportunidades comerciales de clases particulares para Alejo (profesor particular independiente de Matemática, Física, Química, Biofísica y afines en Argentina).\n\n' +
+    'Analizá cada comentario o publicación pública (en YouTube, TikTok, Instagram, foros, etc.) distinguiendo cuatro dimensiones independientes:\n\n' +
+    '1. INTENCIÓN DE CLASES (es_solicitud_clases):\n' +
+    '   - true: la persona busca o necesita tomar/contratar clases particulares o apoyo docente personalizado.\n' +
+    '   - false: dudas puntuales o gratuitas del video/tema, agradecimientos, felicitaciones, spam o venta de apuntes.\n\n' +
+    '2. DESTINATARIO (destinatario):\n' +
+    '   - "pedido_abierto": búsqueda abierta dirigida a cualquier profesor o a la comunidad (ej. "busco profe particular de biofísica online", "alguien que dé clases de álgebra?", "conocen a alguien que explique química?").\n' +
+    '   - "dirigido_al_creador": mensaje dirigido explícitamente al autor o creador del contenido (ej. "profe das clases particulares?", "cuánto cobrás tus clases?", "me gustaría estudiar con vos", "¿vos dictás clases?", "¿me das clases a mí?").\n' +
+    '   - "dirigido_a_otro_docente": mensaje respondiendo a otro docente o mencionando a un tercero específico.\n' +
+    '   - "ambiguo": no queda claro si le habla al creador del video o busca un profesor en general.\n' +
+    '   - "desconocido": no determinable o no aplica.\n\n' +
+    '3. CONTACTABILIDAD (contactabilidad):\n' +
+    '   - "canal_publico_permitido": comentario en una plataforma pública donde es legítimo y habitual responder públicamente (YouTube, foros públicos como UTNianos).\n' +
+    '   - "contacto_ofrecido_voluntariamente": el usuario facilitó voluntariamente en su mensaje un email, teléfono, WhatsApp o usuario de red social para que lo contacten.\n' +
+    '   - "via_inexistente": no hay forma técnica ni canal viable para contactar a la persona.\n' +
+    '   - "no_verificada": plataformas (como TikTok o Instagram) donde un tercero no puede enviar DM directo sin seguirse previamente o donde responder comercialmente viola normas comunitarias.\n\n' +
+    '4. OPORTUNIDAD COMERCIAL PARA ALEJO (oportunidad_comercial_alejo):\n' +
+    '   - true ÚNICAMENTE SI: es_solicitud_clases es true, destinatario es "pedido_abierto" (o contacto_ofrecido_voluntariamente), NO está dirigido al creador ni a otro docente, y hay vía de contacto ética y permitida.\n' +
+    '   - false si está dirigido al creador ("dirigido_al_creador"), dirigido a otro docente, si no es solicitud de clases, o si la vía de contacto es inexistente.\n' +
+    '   - Si el destinatario es "ambiguo", oportunidad_comercial_alejo DEBE ser false (requiere revisión manual).\n\n' +
     schemaDesc + '\n\n' +
     'Elementos a evaluar:\n';
   (items || []).forEach(function (it, idx) {
     prompt += '\n--- Elemento ' + (idx + 1) + ' ---\n';
     prompt += 'ID: ' + it.id + '\n';
-    prompt += 'Fuente: ' + (it.sourceLabel || it.source || '') + '\n';
-    prompt += 'Título: ' + (it.title || '') + '\n';
+    prompt += 'Plataforma: ' + (it.sourceLabel || it.source || it.platform || '') + '\n';
+    prompt += 'Título/Contexto: ' + (it.title || '') + '\n';
     prompt += 'Texto: ' + (it.text ? String(it.text).slice(0, 500) : '') + '\n';
   });
   return prompt;
@@ -1022,7 +1055,7 @@ function buildGeminiPrompt(items) {
 function parseGeminiResponse(rawText) {
   if (!rawText) return null;
   var clean = String(rawText).trim();
-  clean = clean.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
+  clean = clean.replace(/^^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
   try {
     var data = JSON.parse(clean);
     if (!Array.isArray(data)) {
@@ -1030,15 +1063,64 @@ function parseGeminiResponse(rawText) {
       else return null;
     }
     var validated = [];
+    var validDest = {
+      'pedido_abierto': 1,
+      'dirigido_al_creador': 1,
+      'dirigido_a_otro_docente': 1,
+      'ambiguo': 1,
+      'desconocido': 1
+    };
+    var validCont = {
+      'canal_publico_permitido': 1,
+      'contacto_ofrecido_voluntariamente': 1,
+      'via_inexistente': 1,
+      'no_verificada': 1
+    };
+
     data.forEach(function (obj) {
       if (obj && typeof obj === 'object' && obj.id) {
+        var isSol = obj.es_solicitud_clases === true;
+
+        var rawDest = String(obj.destinatario || '').toLowerCase().trim().replace(/[\s-]+/g, '_');
+        var dest = rawDest;
+        if (!validDest[dest]) {
+          if (/creador|autor|dueño|profe_vos|a_vos/i.test(rawDest)) dest = 'dirigido_al_creador';
+          else if (/abierto|comunidad|todos/i.test(rawDest)) dest = 'pedido_abierto';
+          else if (/otro|tercero/i.test(rawDest)) dest = 'dirigido_a_otro_docente';
+          else if (/ambiguo|dudoso/i.test(rawDest)) dest = 'ambiguo';
+          else dest = isSol ? 'pedido_abierto' : 'desconocido';
+        }
+
+        var rawCont = String(obj.contactabilidad || '').toLowerCase().trim().replace(/[\s-]+/g, '_');
+        var cont = rawCont;
+        if (!validCont[cont]) {
+          if (/ofrecido|voluntario|whatsapp|email|telefono/i.test(rawCont)) cont = 'contacto_ofrecido_voluntariamente';
+          else if (/publico|canal_publico|abierto/i.test(rawCont)) cont = 'canal_publico_permitido';
+          else if (/inexistente|cerrado|imposible/i.test(rawCont)) cont = 'via_inexistente';
+          else cont = isSol ? 'canal_publico_permitido' : 'no_verificada';
+        }
+
+        var conf = typeof obj.confianza === 'number' ? Math.max(0, Math.min(1, obj.confianza)) : 0.5;
+
+        // Regla dura de seguridad: si está dirigido al creador, a otro docente, no busca clases o es ambiguo,
+        // NUNCA puede considerarse oportunidad comercial real para Alejo.
+        var opComercial = typeof obj.oportunidad_comercial_alejo === 'boolean'
+          ? obj.oportunidad_comercial_alejo
+          : (isSol && dest === 'pedido_abierto' && cont !== 'via_inexistente');
+        if (!isSol || dest === 'dirigido_al_creador' || dest === 'dirigido_a_otro_docente' || dest === 'ambiguo' || cont === 'via_inexistente') {
+          opComercial = false;
+        }
+
         validated.push({
           id: String(obj.id),
-          es_solicitud_clases: obj.es_solicitud_clases === true,
+          es_solicitud_clases: isSol,
+          destinatario: dest,
+          contactabilidad: cont,
+          oportunidad_comercial_alejo: opComercial,
           materia: String(obj.materia || ''),
           nivel: String(obj.nivel || ''),
           urgencia: String(obj.urgencia || 'ninguna'),
-          confianza: typeof obj.confianza === 'number' ? Math.max(0, Math.min(1, obj.confianza)) : 0.5,
+          confianza: conf,
           resumen: String(obj.resumen || '')
         });
       }

@@ -148,7 +148,7 @@ function setup() {
   var fnRows = rows_(SH.FN);
   if (!fnRows.length && typeof EDUCATIONAL_SOURCES !== 'undefined' && Array.isArray(EDUCATIONAL_SOURCES)) {
     var defaultFnRows = EDUCATIONAL_SOURCES.map(function (s) {
-      return [s.id, s.platform, s.creator, s.topics, s.level, s.channelUrl, s.resourceId, s.active ? 'TRUE' : 'FALSE', '', s.notes];
+      return [s.id, s.platform, s.creator, s.topics, s.level, s.channelUrl, s.resourceId, 'FALSE', '', s.notes];
     });
     append_(SH.FN, defaultFnRows);
   }
@@ -456,8 +456,9 @@ function handleItem_(it, cfg, ctx, st, alerts, now, isSim) {
 
   // Registro de nueva oportunidad independiente
   var rec = evaluate(it, cfg, now, ctx.index, ctx.contacted);
+  var srcNorm = norm((it.source || it.sourceKey || it.sourceLabel || '') + ' ' + (it.platform || ''));
   var proactiveGemini = cfg.GEMINI_ACTIVO && it.kind === 'tutoring' &&
-    (it.source === 'youtube' || it.source === 'utnianos' || it.source === 'google_alerts' ||
+    (/youtube|tiktok|instagram|facebook|reddit|twitter|\bx\b|foro|utnianos|google_alerts/i.test(srcNorm) ||
      /buscar\/alumnos\.aspx/i.test(it.url || ''));
   if (proactiveGemini && rec.status !== 'Descartado' && rec.status !== 'Evaluado' && !isSim) {
     queueGeminiItem_(it, false);
@@ -466,12 +467,9 @@ function handleItem_(it, cfg, ctx, st, alerts, now, isSim) {
   }
   markSeen_(ctx, 'op:' + rec.id, isSim);
 
-  // Exclusión estricta de descartes para fuentes proactivas (UTNianos, YouTube, feeds, alertas, búsqueda de alumnos)
+  // Exclusión estricta de descartes para fuentes proactivas (UTNianos, YouTube, TikTok, Instagram, redes, feeds, alertas)
   var isProactiveSource = (
-    it.source === 'youtube' || it.sourceKey === 'youtube' ||
-    it.source === 'utnianos' || it.sourceKey === 'utnianos' ||
-    it.source === 'google_alerts' || it.sourceKey === 'google_alerts' ||
-    /feed|rss|alert|bulletin|boletin/i.test(it.sourceKey || '') ||
+    /youtube|tiktok|instagram|facebook|reddit|twitter|\bx\b|foro|utnianos|google_alerts|feed|rss|alert|bulletin|boletin/i.test(srcNorm) ||
     /buscar\/alumnos\.aspx/i.test(it.url || '')
   );
 
@@ -663,18 +661,41 @@ function processGeminiQueue_(cfg, ctx, st, alerts, isSim) {
     pendingIndices.forEach(function (rowIdx, idx) {
       var item = pending[idx];
       var r = resMap[item.id];
-      var statusText = r ? (r.es_solicitud_clases ? 'Aprobado: ' + r.materia : 'Rechazado: ' + r.resumen) : 'Sin respuesta';
-      // Solo alta confianza y solicitud abierta/contactable habilitan registro.
-      if (r && r.es_solicitud_clases === true && r.confianza >= 0.7 && item.savedItem) {
-        var it = item.savedItem;
+      var statusText = 'Sin respuesta';
+
+      if (!r) {
+        statusText = 'Error: sin respuesta del modelo';
+      } else if (!r.es_solicitud_clases) {
+        // Dimensión 1: No busca clases particulares
+        statusText = 'Rechazado: no busca clases (' + (r.resumen || 'duda puntual o comentario') + ')';
+      } else if (r.destinatario === 'dirigido_al_creador') {
+        // Dimensión 2: Consulta dirigida al creador/autor del contenido (NO es oportunidad para Alejo)
+        statusText = 'Rechazado: dirigido al creador (' + (r.resumen || 'consulta exclusiva al autor') + ')';
+      } else if (r.destinatario === 'dirigido_a_otro_docente') {
+        // Dimensión 2: Consulta dirigida a otro docente específico
+        statusText = 'Rechazado: dirigido a otro docente (' + (r.resumen || 'interacción con un tercero') + ')';
+      } else if (r.contactabilidad === 'via_inexistente') {
+        // Dimensión 3: Sin vía de contacto viable o permitida
+        statusText = 'Rechazado: sin vía de contacto (' + (r.resumen || 'canal no disponible') + ')';
+      } else if (r.destinatario === 'ambiguo' || r.contactabilidad === 'no_verificada') {
+        // Dimensión 2 & 3: Ambiguo o vía no verificada -> REVISIÓN MANUAL (sin alta comercial automática)
+        var motivoManual = r.destinatario === 'ambiguo' ? 'destinatario ambiguo' : 'canal no verificado';
+        statusText = 'Revisión manual: ' + motivoManual + ' (' + (r.resumen || '') + ')';
+      } else if (r.confianza < 0.7) {
+        // Confianza baja -> REVISIÓN MANUAL
+        statusText = 'Revisión manual: confianza baja (' + (r.confianza ? (r.confianza * 100).toFixed(0) + '%' : '-') + ')';
+      } else if (r.oportunidad_comercial_alejo === true) {
+        // Dimensión 4: Oportunidad comercial real para Alejo (Aprobada)
+        var it = item.savedItem || { id: item.id, source: (item.sourceLabel || '').toLowerCase(), sourceLabel: item.sourceLabel, title: item.title, text: item.text, url: '', kind: 'tutoring' };
         if (it.publishedAt) it.publishedAt = new Date(it.publishedAt);
         // Evitar un segundo paso por la cola sin desactivar el filtrado para otras fuentes.
         var approvedCfg = Object.assign({}, cfg, { GEMINI_ACTIVO: false });
         handleItem_(it, approvedCfg, ctx, st, alerts, new Date(), false);
-        statusText = 'Aprobado: ' + r.materia;
-      } else if (r && r.es_solicitud_clases && item.savedItem) {
-        statusText = 'Revisión manual: confianza baja';
+        statusText = 'Aprobado: ' + (r.materia || 'Clases');
+      } else {
+        statusText = 'Revisión manual: no concluyente';
       }
+
       sh.getRange(rowIdx, 6, 1, 1).setValues([[sanitizeForSheets(statusText)]]);
     });
   }

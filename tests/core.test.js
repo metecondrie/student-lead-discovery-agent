@@ -1159,6 +1159,7 @@ test('Hoja Fuentes: setup() crea la hoja Fuentes con encabezados y fuentes prede
   assert.ok(rows.some(r => r[1] === 'YouTube' && r[2].includes('Mathematics with Juan')));
   assert.ok(rows.some(r => r[1] === 'YouTube' && r[2].includes('Filadd UBA')));
   assert.ok(rows.some(r => r[1] === 'YouTube' && r[2].includes('Quimiayudas')));
+  assert.ok(rows.every(r => r[7] === 'FALSE'), 'Todas las fuentes precargadas de YouTube deben comenzar con Activo = FALSE');
 });
 
 test('Integración YouTube: runCycle procesa comentarios de YouTube, filtra ruido y deduplica', () => {
