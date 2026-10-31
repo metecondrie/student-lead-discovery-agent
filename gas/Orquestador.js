@@ -119,6 +119,15 @@ function orqStart(sourceIds,maxComments) {
     var count=Number(maxComments);
     if(!isFinite(count)||count<1||count>20||Math.floor(count)!==count)
       throw new Error('El máximo por video debe estar entre 1 y 20.');
+    var p=PropertiesService.getScriptProperties();
+    var ycap=checkYouTubeQuota_(p,{YOUTUBE_MAX_DAILY_QUOTA:Number(cfg.YOUTUBE_MAX_DAILY_QUOTA)||100});
+    if(queue.length>ycap.max-ycap.used)
+      throw new Error('No alcanza la cuota local restante de YouTube para los '+queue.length+' videos.');
+    var gcap=checkGeminiQuota_(p,{GEMINI_MAX_DAILY_CALLS:Number(cfg.GEMINI_MAX_DAILY_CALLS)||20});
+    var estimated=queue.length*Math.ceil(count/5);
+    if(estimated>gcap.max-gcap.count)
+      throw new Error('La configuración requiere hasta '+estimated+' llamadas a Gemini, pero quedan '+
+        (gcap.max-gcap.count)+'. Elegí menos videos o comentarios por video.');
     var id='ORQ-'+Utilities.formatDate(new Date(),'America/Argentina/Buenos_Aires','yyyyMMdd-HHmmss')+
       '-'+Utilities.getUuid().slice(0,6);
     var state={id:id,estado:'EJECUTANDO',inicio:new Date().toISOString(),cursor:0,
@@ -296,9 +305,18 @@ function orqStatus(){
       daily[k].errores+=Number(r[11])||0;
     });
   }
+  var candidates=[];
+  if(s.id&&ss.getSheetByName('OrqHallazgos')){
+    orqRows_(ss.getSheetByName('OrqHallazgos')).forEach(function(r){
+      if(String(r[0])===s.id&&String(r[11])==='REVISAR'){
+        candidates.push({fuente:String(r[2]),url:String(r[5]),materia:String(r[12]),
+          nivel:String(r[13]),texto:String(r[7]).slice(0,240),resumen:String(r[15]).slice(0,160)});
+      }
+    });
+  }
   return {estado:s.estado,id:s.id||'',inicio:s.inicio||'',cursor:s.cursor||0,
     total:s.queue?s.queue.length:0,mensaje:s.mensaje||'',maxComments:s.maxComments||20,
-    fuentes:all,seleccion:selected,metricas:totals,
+    fuentes:all,seleccion:selected,metricas:totals,candidatos:candidates.slice(0,30),
     historial:Object.keys(daily).sort().reverse().slice(0,30).map(function(k){return daily[k];}),
     link:ss.getUrl(),version:'orquestador-v1'};
 }
