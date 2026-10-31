@@ -147,11 +147,9 @@ function orqScheduleAt_(dateObj) {
 }
 
 function orqSources_(ss) {
-  if (typeof sincronizarCatalogoFuentes === 'function') {
-    try { sincronizarCatalogoFuentes(ss); } catch(e) {}
-  }
+  // LECTURA PURA: NUNCA sincroniza, muta ni borra la hoja Fuentes en consultas de estado o ticks
   var sh = ss.getSheetByName('Fuentes');
-  if (!sh) throw new Error('La hoja Fuentes no existe.');
+  if (!sh) return [];
   var lastRow = sh.getLastRow(), lastCol = sh.getLastColumn();
   if (lastRow < 2) return [];
 
@@ -353,11 +351,7 @@ function orqStart(sourceIds, maxComments) {
     if (gcap.allowed === false || (gcap.max && (gcap.max - (gcap.count || 0)) <= 0)) {
       throw new Error('PAUSADO_CUOTA: La cuota diaria de Gemini para hoy está agotada (' + (gcap.count || 0) + '/' + (gcap.max || 20) + '). Esperá a la próxima ventana de reinicio.');
     }
-    var estimated = selectedSources.length * Math.ceil(count / 5);
-    if (gcap.max && estimated > gcap.max && !(maxComments && maxComments.allowDistributed)) {
-      throw new Error('La configuración requiere hasta ' + estimated + ' llamadas a Gemini, pero el límite diario es ' +
-        gcap.max + '. Elegí menos fuentes o comentarios por fuente.');
-    }
+    // Modo distribuido: encola todas las fuentes seleccionadas y gestiona la cuota real progresivamente por lote
 
     // Validar claves necesarias según conectores seleccionados
     var hasYouTube = selectedSources.some(function(s) { return s.connector === 'youtube_canales'; });
@@ -531,6 +525,13 @@ function orqTick() {
     var tickStart = Date.now();
     var now = new Date();
     try {
+      // Verificar cuota antes de ejecutar llamadas a APIs
+      var gcap = typeof checkGeminiQuota_ === 'function' ?
+        checkGeminiQuota_(p, { GEMINI_MAX_DAILY_CALLS: Number(cfg.GEMINI_MAX_DAILY_CALLS) || 20 }) : { allowed: true, count: 0, max: 20 };
+      if (gcap.allowed === false || (gcap.max && (gcap.max - (gcap.count || 0)) <= 0)) {
+        throw new Error('PAUSADO_CUOTA: Límite diario de Gemini alcanzado (' + (gcap.count || 0) + '/' + (gcap.max || 20) + '). Se reanudará en la próxima ventana.');
+      }
+
       if (job.connector === 'youtube_canales') {
         result = orqExecuteYouTube_(ss, run, source);
       } else if (job.connector === 'rss_foros') {
@@ -645,7 +646,7 @@ function orqResume() {
   var cRows = orqRows_(shCola);
   for (var ci = 0; ci < cRows.length; ci++) {
     if (String(cRows[ci][0]) === run.id && String(cRows[ci][5]) === 'PAUSADO_CUOTA') {
-      shCola.getRange(ci + 2, 6, 1, 1).setValue('PENDIENTE');
+      shCola.getRange(ci + 2, 6, 1, 1).setValues([['PENDIENTE']]);
     }
   }
   orqSaveRun_(run);
@@ -731,7 +732,7 @@ function orqExecuteYouTube_(ss, run, source) {
   for (var b = 0; b < unclassified.length; b += 5) {
     var gcap = typeof checkGeminiQuota_ === 'function' ?
       checkGeminiQuota_(p, { GEMINI_MAX_DAILY_CALLS: Number(cfg.GEMINI_MAX_DAILY_CALLS) || 20 }) : { allowed: true };
-    if (!gcap.allowed) { res.estado = 'PARCIAL: cuota Gemini'; res.errores++; break; }
+    if (!gcap.allowed) { throw new Error('PAUSADO_CUOTA: Límite diario de Gemini alcanzado (' + (gcap.count || 0) + '/' + (gcap.max || 20) + ').'); }
 
     var batch = unclassified.slice(b, b + 5);
     res.gemini++;

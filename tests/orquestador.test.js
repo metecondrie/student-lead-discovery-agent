@@ -175,10 +175,19 @@ test('error de una fuente queda visible pero no bloquea fuentes posteriores',()=
  assert.equal(last.metricas.errores,1);
 });
 
-test('previene corrida que excede cuota local de Gemini antes de llamadas',()=>{
- const e=environment({quota:2});
- assert.throws(()=>e.ctx.orqStart(['id-a','id-b'],20),/requiere hasta/);
- assert.equal(e.requests.length,0);
+test('rechaza iniciar si la cuota diaria ya está totalmente agotada antes de arrancar', () => {
+ const e = environment({quota: 2});
+ e.stats.gem = 2; // Simular cuota ya agotada
+ assert.throws(() => e.ctx.orqStart(['id-a', 'id-b'], 20), /PAUSADO_CUOTA/);
+ assert.equal(e.requests.length, 0);
+});
+
+test('orqStart encola multiples fuentes sin bloquear por estimacion teorica y pausa por cuota real', () => {
+ const e = environment({quota: 1});
+ // No debe bloquearse por estimación teórica: arranca y encola los trabajos
+ const res = e.ctx.orqStart(['id-a', 'id-b'], 20);
+ assert.equal(res.estado, 'EJECUTANDO');
+ assert.equal(res.total, 2);
 });
 
 test('no duplica candidatos ya vistos al repetir una busqueda',()=>{

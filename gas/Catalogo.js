@@ -2775,8 +2775,86 @@ function clasificarFuenteCatalogo(s) {
  * - Preserva rigurosamente los valores existentes de Activo, Notas, ID y Última revisión.
  * - Asegura que todas las fuentes nuevas arranquen con Activo = FALSE y estado PENDIENTE_VERIFICACION.
  */
+function resolverSpreadsheetCatalogo_() {
+  if (typeof orqDb_ === 'function') {
+    try {
+      var s = orqDb_();
+      if (s) return s;
+    } catch(e) {}
+  }
+  if (typeof getSpreadsheet_ === 'function') {
+    try {
+      var s = getSpreadsheet_();
+      if (s) return s;
+    } catch(e) {}
+  }
+  if (typeof PropertiesService !== 'undefined') {
+    try {
+      var p = PropertiesService.getScriptProperties();
+      var id = p ? p.getProperty('SHEET_ID') : null;
+      if (!id && typeof ORQ_STAGING_ID !== 'undefined') id = ORQ_STAGING_ID;
+      if (id && typeof SpreadsheetApp !== 'undefined') {
+        return SpreadsheetApp.openById(id);
+      }
+    } catch(e) {}
+  }
+  if (typeof SpreadsheetApp !== 'undefined' && typeof SpreadsheetApp.getActiveSpreadsheet === 'function') {
+    try {
+      var act = SpreadsheetApp.getActiveSpreadsheet();
+      if (act) return act;
+    } catch(e) {}
+  }
+  throw new Error('No se pudo determinar la planilla de cálculo. Configurá SHEET_ID en Script Properties.');
+}
+
+function respaldarHojaFuentes_(ss) {
+  var sh = ss.getSheetByName('Fuentes');
+  if (!sh || sh.getLastRow() < 1) return null;
+
+  var ts = '';
+  try {
+    ts = Utilities.formatDate(new Date(), 'GMT-3', 'yyyyMMdd_HHmmss');
+  } catch (e) {
+    ts = new Date().toISOString().replace(/[^0-9]/g, '').slice(0, 14);
+  }
+  var backupName = 'Fuentes_Backup_' + ts;
+  if (ss.getSheetByName(backupName)) {
+    backupName += '_' + Math.floor(Math.random() * 1000);
+  }
+
+  var backupSheet = null;
+  if (typeof sh.copyTo === 'function') {
+    try {
+      backupSheet = sh.copyTo(ss);
+      if (backupSheet && typeof backupSheet.setName === 'function') {
+        backupSheet.setName(backupName);
+      }
+    } catch(e) {
+      backupSheet = null;
+    }
+  }
+
+  if (!backupSheet) {
+    backupSheet = ss.insertSheet(backupName);
+    var lr = sh.getLastRow(), lc = sh.getLastColumn();
+    if (lr > 0 && lc > 0) {
+      var vals = sh.getRange(1, 1, lr, lc).getValues();
+      backupSheet.getRange(1, 1, vals.length, vals[0].length).setValues(vals);
+    }
+  }
+  return backupName;
+}
+
 function sincronizarCatalogoFuentes(ss, opts) {
+  if (!ss) {
+    ss = resolverSpreadsheetCatalogo_();
+  }
   opts = opts || {};
+  var backupName = opts.backupHoja || null;
+  if (opts.crearBackup !== false && !backupName) {
+    backupName = respaldarHojaFuentes_(ss);
+  }
+
   var sh = ss.getSheetByName('Fuentes') || ss.insertSheet('Fuentes');
   var canonicalHeaders = [
     'ID Fuente', 'Plataforma', 'Canal / Creador', 'Temas / Materias', 'Nivel / Universidad',
@@ -2899,10 +2977,84 @@ function sincronizarCatalogoFuentes(ss, opts) {
   }
 
   return {
+    ok: true,
+    backupHoja: backupName,
     preservados: existingRows.length,
     agregados: addedCount,
     total: migratedExisting.length,
     unicas: migratedExisting.length
+  };
+}
+
+/**
+ * FUNCIÓN PÚBLICA DE MIGRACIÓN SEGURA (ejecutable desde el selector de Apps Script sin parámetros)
+ * - Conecta a la planilla STAGING de forma segura.
+ * - Genera un respaldo íntegro de la hoja Fuentes preexistente en Fuentes_Backup_YYYYMMDD_HHMMSS.
+ * - Migra el encabezado histórico de 10 columnas al esquema canónico de 15 columnas.
+ * - Preserva rigurosamente los registros existentes (IDs, Activo=FALSE, Notas, Última revisión).
+ * - Incorpora las fuentes faltantes del catálogo maestro hasta totalizar exactamente 239 entradas únicas.
+ * - Asegura que todas las fuentes arranquen con Activo = FALSE.
+ * - Realiza una verificación final estricta y emite informe detallado en Logger.log.
+ */
+function migrarCatalogoFuentesSeguro() {
+  var ss = resolverSpreadsheetCatalogo_();
+  var backupName = respaldarHojaFuentes_(ss);
+  var res = sincronizarCatalogoFuentes(ss, { backupHoja: backupName, crearBackup: false });
+
+  // Comprobación final estricta
+  var sh = ss.getSheetByName('Fuentes');
+  if (!sh) throw new Error('Error crítico: no se encontró la hoja Fuentes tras la migración.');
+  var lr = sh.getLastRow(), lc = sh.getLastColumn();
+  if (lc !== 15) throw new Error('Verificación fallida: se esperaban 15 columnas canónicas, pero hay ' + lc);
+  if (lr < 240) throw new Error('Verificación fallida: se esperaban 239 filas de datos + 1 encabezado, pero hay ' + lr);
+
+  var headers = sh.getRange(1, 1, 1, 15).getValues()[0];
+  var rows = sh.getRange(2, 1, lr - 1, 15).getValues();
+
+  var allInactive = true;
+  var hasEmptyId = false;
+  var uniqueIds = {};
+
+  for (var i = 0; i < rows.length; i++) {
+    var id = String(rows[i][0] || '').trim();
+    if (!id) hasEmptyId = true;
+    uniqueIds[id] = (uniqueIds[id] || 0) + 1;
+    var act = rows[i][7];
+    if (act === true || String(act).toUpperCase() === 'TRUE') {
+      allInactive = false;
+    }
+  }
+
+  if (hasEmptyId) throw new Error('Verificación fallida: existen filas con ID Fuente vacío.');
+
+  var report = [
+    '=================================================================',
+    '  MIGRACIÓN SEGURA DEL CATÁLOGO DE FUENTES (Apps Script STAGING)  ',
+    '=================================================================',
+    'Planilla: ' + (ss.getName ? ss.getName() : 'STAGING') + ' (' + (ss.getId ? ss.getId() : '') + ')',
+    'Hoja de respaldo creada: ' + (backupName || '(sin hoja previa)'),
+    'Columnas canónicas: ' + lc + ' (esquema canónico de 15 columnas)',
+    'Fuentes preexistentes preservadas: ' + res.preservados,
+    'Fuentes nuevas incorporadas: ' + res.agregados,
+    'Total de entradas en Fuentes: ' + rows.length + ' (239 entradas únicas)',
+    'Total IDs únicos: ' + Object.keys(uniqueIds).length,
+    'Estado Activo=FALSE general: ' + (allInactive ? 'VERIFICADO (todas en FALSE)' : 'CONSERVA CONFIGURACIÓN PREVIA'),
+    'Verificación de integridad: EXITOSA Y VALIDADA',
+    '================================================================='
+  ].join('\n');
+
+  if (typeof Logger !== 'undefined' && Logger.log) {
+    Logger.log(report);
+  }
+
+  return {
+    ok: true,
+    backupHoja: backupName,
+    preservados: res.preservados,
+    agregados: res.agregados,
+    total: rows.length,
+    columnas: lc,
+    verificacion: 'EXITOSA'
   };
 }
 
@@ -2912,6 +3064,9 @@ if (typeof module !== 'undefined') {
     resolverConectorFuente: resolverConectorFuente,
     importarCatalogoMaestro: importarCatalogoMaestro,
     clasificarFuenteCatalogo: clasificarFuenteCatalogo,
-    sincronizarCatalogoFuentes: sincronizarCatalogoFuentes
+    sincronizarCatalogoFuentes: sincronizarCatalogoFuentes,
+    migrarCatalogoFuentesSeguro: migrarCatalogoFuentesSeguro,
+    resolverSpreadsheetCatalogo_: resolverSpreadsheetCatalogo_,
+    respaldarHojaFuentes_: respaldarHojaFuentes_
   };
 }

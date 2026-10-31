@@ -30,11 +30,29 @@ function createMockEnv(opts = {}) {
       getLastRow: () => rows.length,
       getLastColumn: () => (rows.length > 0 ? rows[0].length : 0),
       setFrozenRows: () => {},
+      clearContents: () => { rows.length = 0; },
+      copyTo: (targetSs) => {
+        const copyName = name + '_copy_' + uid++;
+        const copy = makeSheet(copyName, rows);
+        return {
+          setName: (newName) => {
+            delete sheets[copyName];
+            copy.name = newName;
+            sheets[newName] = copy;
+            return copy;
+          }
+        };
+      },
       getDataRange: () => ({
         getValues: () => rows.map(r => r.slice())
       }),
       getRange: (row, col, height, width) => ({
         getValues: () => rows.slice(row - 1, row - 1 + height).map(r => r.slice(col - 1, col - 1 + width)),
+        setValue: (val) => {
+          const targetRow = row - 1;
+          while (rows.length <= targetRow) rows.push([]);
+          rows[targetRow][col - 1] = val;
+        },
         setValues: (values) => {
           values.forEach((r, i) => {
             const targetRow = row - 1 + i;
@@ -118,11 +136,20 @@ function createMockEnv(opts = {}) {
       openById: id => {
         if (id !== STAGING) throw new Error('Acceso no permitido');
         return {
+          getId: () => id,
+          getName: () => 'Planilla STAGING Mock',
           getSheetByName: name => sheets[name] || null,
           insertSheet: name => makeSheet(name),
           getUrl: () => 'https://docs.google.com/spreadsheets/d/' + STAGING + '/edit'
         };
-      }
+      },
+      getActiveSpreadsheet: () => ({
+        getId: () => STAGING,
+        getName: () => 'Planilla STAGING Mock',
+        getSheetByName: name => sheets[name] || null,
+        insertSheet: name => makeSheet(name),
+        getUrl: () => 'https://docs.google.com/spreadsheets/d/' + STAGING + '/edit'
+      })
     },
     LockService: {
       getScriptLock: () => ({
@@ -265,7 +292,7 @@ function createMockEnv(opts = {}) {
     parseGeminiResponse: raw => JSON.parse(raw),
     checkYouTubeQuota_: () => ({ allowed: true, max: 100, used: stats.yt }),
     recordYouTubeQuota_: (p, n = 1) => { stats.yt += n; },
-    checkGeminiQuota_: () => ({ allowed: true, max: 50, count: stats.gem }),
+    checkGeminiQuota_: (_, cfg) => { const max = Number(cfg && cfg.GEMINI_MAX_DAILY_CALLS) || 50; return { allowed: stats.gem < max, max: max, count: stats.gem }; },
     recordGeminiCall_: () => { stats.gem++; },
     parseRss: (xml, k, label) => [
       {
@@ -300,30 +327,86 @@ function createMockEnv(opts = {}) {
   return { ctx, props, triggers, sheets, httpRequests, stats };
 }
 
-test('1. Sincronización del catálogo maestro: preserva filas existentes e incorpora las 239 entradas clasificadas', () => {
+test('1. Sincronización del catálogo maestro: lectura pura sin efectos laterales y migración segura con respaldo', () => {
   const env = createMockEnv();
   const ss = env.ctx.SpreadsheetApp.openById(STAGING);
   
-  // Hoja Fuentes arranca con 4 filas preexistentes
+  // 1a) Hoja Fuentes arranca con 4 filas preexistentes
   assert.equal(env.sheets.Fuentes.rows.length, 5); // 1 header + 4 rows
   
-  const sources = env.ctx.orqSources_(ss);
+  // 1b) orqSources_ y orqStatus son de LECTURA PURA: no mutan, no limpian ni migran Fuentes al consultar
+  const initialSources = env.ctx.orqSources_(ss);
+  assert.equal(initialSources.length, 4);
+  assert.equal(env.sheets.Fuentes.rows.length, 5);
+  env.ctx.orqStatus();
+  assert.equal(env.sheets.Fuentes.rows.length, 5); // Polling cada 10s no escribe nada
   
-  // Se incorporan las 239 entradas del catálogo maestro (2 URLs preexistentes coinciden con el catálogo maestro y se desduplican)
-  assert.ok(sources.length >= 239);
+  // 1c) Migración segura sin argumentos: crea respaldo automático y actualiza a 15 columnas
+  const migRes = env.ctx.migrarCatalogoFuentesSeguro();
+  assert.equal(migRes.ok, true);
+  assert.ok(migRes.backupHoja);
+  assert.ok(env.sheets[migRes.backupHoja]); // Hoja de respaldo creada intacta
+  assert.equal(env.sheets[migRes.backupHoja].rows.length, 5); // Respaldo conserva las 4 filas originales
+  assert.equal(migRes.columnas, 15);
+  assert.equal(migRes.total, 241); // 4 existentes + 237 nuevas desduplicadas
+  
+  // 1d) Fuentes migradas tienen 15 columnas y preservan datos existentes
+  const sources = env.ctx.orqSources_(ss);
   assert.equal(sources.length, 241);
   
-  // Filas existentes preservan sus IDs y estado
   const yt01 = sources.find(s => s.id === 'YT-01');
   assert.ok(yt01);
   assert.equal(yt01.enabled, true);
   assert.equal(yt01.connector, 'youtube_canales');
 
-  // Fuentes de Facebook e Instagram quedan registradas con disponibilidad NO_AUTOMATIZABLE
   const fb = sources.find(s => s.platform === 'Facebook');
   assert.ok(fb);
   assert.equal(fb.connector, 'ninguno');
   assert.equal(fb.availability, 'NO_AUTOMATIZABLE');
+
+  // 1e) Consultas posteriores de orqStatus no alteran la hoja Fuentes
+  env.ctx.orqStatus();
+  assert.equal(env.sheets.Fuentes.rows.length, 242);
+});
+
+test('8. Modalidad distribuida: orqStart(\'ALL_ENABLED\', 15) encola >20 fuentes activas con cuotas bajas y retoma progresivamente', () => {
+  const env = createMockEnv();
+  
+  // Crear 25 fuentes operativas activas en Fuentes
+  for (let i = 1; i <= 22; i++) {
+    env.sheets.Fuentes.rows.push([
+      'DIST-' + i, 'YouTube', 'Canal ' + i, 'Matemática', 'CBC',
+      'https://www.youtube.com/channel/UCTest_' + i, 'res_' + i, true,
+      'api_oficial', 'P1', 'DISPONIBLE', 'youtube_canales', 'Canal activo ' + i
+    ]);
+  }
+  
+  // Establecer cuota diaria baja (2 llamadas diarias)
+  const qRow = env.sheets.Config.rows.find(r => r[0] === 'GEMINI_MAX_DAILY_CALLS');
+  if (qRow) qRow[1] = 2;
+  env.props.GEMINI_MAX_DAILY_CALLS = '2';
+  env.stats.gem = 0;
+  
+  // Iniciar la corrida: NO debe bloquearse con error teórico
+  const st = env.ctx.orqStart('ALL_ENABLED', 15);
+  assert.equal(st.estado, 'EJECUTANDO');
+  assert.ok(st.total >= 20); // Más de 20 fuentes encoladas
+  assert.ok(env.sheets.OrqCola.rows.length > 20); // Cola persistente con todos los trabajos
+  
+  // Ejecutar paso 1: consume cuota
+  env.ctx.orqTick();
+  // Al agotarse la cuota real, orqTick pausa limpiamente como PAUSADO_CUOTA
+  env.stats.gem = 2; // Simular cuota alcanzada
+  env.ctx.orqTick();
+  
+  const pausedSt = env.ctx.orqStatus();
+  assert.equal(pausedSt.estado, 'PAUSADO_CUOTA');
+  assert.ok(env.triggers.length > 0); // Programó trigger de reanudación
+  
+  // Simular restablecimiento de cuota y reanudación manual/autónoma
+  env.stats.gem = 0;
+  const resumeRes = env.ctx.orqResume();
+  assert.equal(resumeRes.estado, 'EJECUTANDO');
 });
 
 test('2. Un único botón «Buscar alumnos»: genera cola persistente en OrqCola con fuentes operativas', () => {
