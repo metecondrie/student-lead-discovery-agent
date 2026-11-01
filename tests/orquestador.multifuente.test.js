@@ -601,6 +601,41 @@ function addGmailFixture_(env, id) {
   ]);
 }
 
+test('piloto: previsualización de cuatro fuentes es de solo lectura y detecta fallas', () => {
+  const env = createMockEnv();
+  const sourceRows = [
+    ['CAT-0002', 'Tusclases', 'Avisos Tusclases', 'Matemática', 'CBC', 'https://www.tusclases.com.ar',
+      '', true, 'gmail_autorizado', 'P0', 'DISPONIBLE', 'gmail_alertas', 'Alertas'],
+    ['CAT-0086', 'Plataformas docentes', 'Superprof AR', 'Matemática', 'CBC', 'https://www.superprof.com.ar',
+      '', true, 'gmail_autorizado', 'P0', 'DISPONIBLE', 'gmail_alertas', 'Alertas'],
+    ['CAT-0066', 'Foros', 'UTNianos RSS', 'Matemática', 'UTN', 'https://www.utnianos.com.ar/foro/syndication.php',
+      '', true, 'rss_publico', 'P1', 'DISPONIBLE', 'rss_foros', 'Foro público'],
+    ['CAT-0036', 'YouTube', 'Filadd UBA', 'Matemática', 'CBC', 'https://www.youtube.com/@FiladdUBA',
+      'Z5DyEohToDs', true, 'api_oficial', 'P2', 'DISPONIBLE', 'youtube_canales', 'Canal control']
+  ];
+  sourceRows.forEach(x => env.sheets.Fuentes.rows.push(x));
+  const beforeRows = JSON.stringify(env.sheets.Fuentes.rows);
+  const beforeProps = JSON.stringify(env.props);
+  const plan = env.ctx.orqPreviewPilotoComercial();
+
+  assert.equal(plan.modo, 'SOLO_PREVISUALIZACION');
+  assert.equal(plan.corridaModificada, false);
+  assert.equal(plan.fuentes.length, 4);
+  assert.deepEqual(Array.from(plan.fuentesListas), ['CAT-0002', 'CAT-0086', 'CAT-0066', 'CAT-0036']);
+  assert.equal(JSON.stringify(env.sheets.Fuentes.rows), beforeRows);
+  assert.equal(JSON.stringify(env.props), beforeProps);
+  assert.equal(env.triggers.length, 0);
+  assert.equal(env.sheets.OrqCola, undefined);
+
+  // Una fuente con fallo declarado NO es apta: el preview jamás la activa.
+  const ytRow = env.sheets.Fuentes.rows.find(r => r[0] === 'CAT-0036');
+  ytRow[12] = 'FALLO'; // columna nueva Estado Verificacion (en este fixture se crea explícitamente)
+  env.sheets.Fuentes.rows[0][12] = 'Estado Verificacion';
+  const after = env.ctx.orqPreviewPilotoComercial();
+  assert.equal(after.fuentes.find(x => x.id === 'CAT-0036').listaParaPiloto, false);
+  assert.ok(!Array.from(after.fuentesListas).includes('CAT-0036'));
+});
+
 test('regresión Gmail: rehidrata descriptor con ID en lugar de llamar getMessages sobre JSON', () => {
   const env = createMockEnv();
   addGmailFixture_(env, 'GM-SERIAL');
