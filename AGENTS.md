@@ -5,7 +5,7 @@
 ## Antes de intervenir (obligatorio)
 1. Leer este archivo, `docs/ESTADO_ACTUAL.md`, `docs/ESTRATEGIA_CAPTACION.md`, `SECURITY.md` y luego el código y las pruebas de la rama correcta.
 2. No suponer que `main` tiene la aplicación. La línea con correcciones técnicas es `fix/gmail-diagnostico-y-piloto-20261101` ([PR #12](https://github.com/metecondrie/student-lead-discovery-agent/pull/12)); la candidata de auditorías es `fix/auditoria-criticos-20261101` ([PR #14](https://github.com/metecondrie/student-lead-discovery-agent/pull/14)) aún sin fusionar. Además `feature/auditoria-descartes-manual` contiene una auditoría adicional sin integrar. Leer [comparación](docs/AUDITORIAS_COMPARADAS_Y_CORRECCIONES_2026-11-01.md) antes de cambiar código. Confirmar HEAD/CI vigentes.
-3. Separar hechos confirmados por GitHub, estado de hojas, estado real de Apps Script y declaraciones de documentación anterior. No afirmar que un despliegue funciona porque una prueba simulada pasó.
+3. **Piloto manual preparado:** PR #15, rama `feature/entrada-solicitudes-verificadas-20261101`, añade `gas/SolicitudesVerificadas.js` y la vista del panel. Fuente `CAT-0240` en STAGING **desactivada**; leer [manual](docs/PILOTO_SOLICITUDES_VERIFICADAS_2026-11-01.md). No interpretar que está desplegado ni cambiar `Activo` sin verificar el web app. Separar hechos confirmados por GitHub, estado de hojas, estado real de Apps Script y declaraciones de documentación anterior. No afirmar que un despliegue funciona porque una prueba simulada pasó.
 4. Informar primero el estado encontrado, proponer el cambio mínimo, ejecutar pruebas y documentar resultados. No fusionar ni desplegar versiones solo por la existencia de una rama más nueva.
 
 ## Bloqueantes de continuidad (auditorías del 01/11)
