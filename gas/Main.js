@@ -684,7 +684,8 @@ function processGeminiQueue_(cfg, ctx, st, alerts, isSim) {
         statusText = 'Rechazado: sin vía de contacto (' + (r.resumen || 'canal no disponible') + ')';
       } else if (r.destinatario === 'ambiguo' || r.destinatario === 'desconocido' || r.contactabilidad === 'no_verificada') {
         // Dimensión 2 & 3: Ambiguo o vía no verificada -> REVISIÓN MANUAL (sin alta comercial automática)
-        var motivoManual = (r.destinatario === 'ambiguo' || r.destinatario === 'desconocido') ? 'destinatario no comprobado' : 'canal no verificado';
+        var motivoManual = r.destinatario === 'ambiguo' ? 'destinatario ambiguo' :
+          (r.destinatario === 'desconocido' ? 'destinatario no comprobado' : 'canal no verificado');
         statusText = 'Revisión manual: ' + motivoManual + ' (' + (r.resumen || '') + ')';
       } else if (r.confianza < 0.7) {
         // Confianza baja -> REVISIÓN MANUAL
