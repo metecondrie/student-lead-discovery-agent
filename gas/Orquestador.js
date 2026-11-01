@@ -1302,11 +1302,7 @@ function orqExecuteYouTube_(ss, run, source, jobCursor) {
         return;
       }
       var intention = !!(r.es_solicitud_clases === true);
-      var candidate = !!(intention &&
-        r.destinatario === 'pedido_abierto' &&
-        r.oportunidad_comercial_alejo === true &&
-        Number(r.confianza) >= 0.7 &&
-        ['canal_publico_permitido', 'contacto_ofrecido_voluntariamente'].indexOf(r.contactabilidad) >= 0);
+      var candidate = orqIsCommercialCandidate_(r);
 
       res.clasificados++;
       if (intention) res.solicitudes++;
@@ -1349,6 +1345,28 @@ function orqExecuteYouTube_(ss, run, source, jobCursor) {
   res.duracion = Math.round((Date.now() - tick) / 100) / 10;
   orqRecordFuente_(ss, res);
   return res;
+}
+
+/** Candidato comercial: misma regla estricta para YouTube, RSS y Gmail. */
+function orqIsCommercialCandidate_(r) {
+  return !!(r && r.es_solicitud_clases === true &&
+    r.destinatario === 'pedido_abierto' &&
+    r.oportunidad_comercial_alejo === true &&
+    Number(r.confianza) >= 0.7 &&
+    ['canal_publico_permitido', 'contacto_ofrecido_voluntariamente'].indexOf(r.contactabilidad) >= 0);
+}
+
+/** Error Gemini no-cuota. No asignar contacto ofrecido ni confianza ficticia. */
+function orqSafeGeminiError_(err) {
+  if (orqIsQuotaError_(err)) return err;
+  var message = String(err && err.message || err || '');
+  var isModel = /Gemini HTTP (400|404)\b/i.test(message) ||
+    /(?:model not found|model.*not supported|invalid model)/i.test(message);
+  var result = new Error((isModel ? 'ERROR_MODELO' : 'ERROR_GEMINI') +
+    ': No se pudo verificar clasificación ni contactabilidad. ' +
+    message.replace(/[\r\n]+/g, ' ').slice(0, 110));
+  result.classificationUnavailable = true;
+  return result;
 }
 
 function orqExecuteRss_(ss, run, source, jobCursor) {
@@ -1450,17 +1468,13 @@ function orqExecuteRss_(ss, run, source, jobCursor) {
     });
 
     var byId = {};
-    var geminiFailedNonQuota = false;
     try {
       byId = orqCallGeminiBatch_(batch, model, gemKey, cfg);
       res.gemini++;
       if (typeof recordGeminiCall_ === 'function') recordGeminiCall_(p);
     } catch(e) {
-      if (orqIsQuotaError_(e) || typeof evaluate !== 'function') {
-        throw orqAttachPartial_(e, res, unclassified.slice(b), baseOffset + b, jobCursor && jobCursor.pauseCount, { prevCursor: jobCursor });
-      }
-      geminiFailedNonQuota = true;
-      res.errores++;
+      throw orqAttachPartial_(orqSafeGeminiError_(e), res, unclassified.slice(b),
+        baseOffset + b, jobCursor && jobCursor.pauseCount, { prevCursor: jobCursor });
     }
 
     var batchRows = [];
@@ -1472,26 +1486,10 @@ function orqExecuteRss_(ss, run, source, jobCursor) {
       var intention = false, candidate = false;
       if (r) {
         intention = !!(r.es_solicitud_clases === true);
-        candidate = !!(intention && r.destinatario === 'pedido_abierto' && r.oportunidad_comercial_alejo === true);
+        candidate = orqIsCommercialCandidate_(r);
         res.clasificados++;
         if (intention) res.solicitudes++;
         if (candidate) res.candidatos++;
-      } else if (geminiFailedNonQuota && typeof evaluate === 'function') {
-        // Fallback a evaluación por reglas solo ante fallos HTTP no-cuota de Gemini
-        var ev = evaluate({ title: it.title, text: it.text, url: it.url, publishedAt: it.publishedAt, kind: 'tutoring' }, cfg, new Date(), {}, {});
-        intention = ev.status !== 'Descartado';
-        candidate = (['alta', 'media'].indexOf(String(ev.compatible || '').toLowerCase()) >= 0) && intention;
-        res.clasificados++;
-        if (intention) res.solicitudes++;
-        if (candidate) res.candidatos++;
-        r = {
-          destinatario: 'pedido_abierto',
-          contactabilidad: 'canal_publico_permitido',
-          materia: ev.subject || '',
-          nivel: '',
-          confianza: ev.score >= 5 ? 0.9 : 0.7,
-          resumen: ev.reasons || ''
-        };
       } else {
         missingInBatch.push(origIt);
         return;
@@ -1887,18 +1885,14 @@ function orqExecuteGmail_(ss, run, source, jobCursor) {
 
     var batch = candidateItems.slice(b, b + 5);
     var byId = {};
-    var geminiFailedNonQuota = false;
     try {
       var gemBatch = batch.map(function(it){ return { id: it._computedId, sourceLabel: 'Gmail', title: it.title, text: (it.text || '').slice(0, 500), url: it.url }; });
       byId = orqCallGeminiBatch_(gemBatch, model, gemKey, cfg);
       res.gemini++;
       if (typeof recordGeminiCall_ === 'function') recordGeminiCall_(p);
     } catch(e) {
-      if (orqIsQuotaError_(e) || typeof evaluate !== 'function') {
-        throw orqAttachPartial_(e, res, candidateItems.slice(b), baseOffset + b, jobCursor && jobCursor.pauseCount, { prevCursor: jobCursor });
-      }
-      geminiFailedNonQuota = true;
-      res.errores++;
+      throw orqAttachPartial_(orqSafeGeminiError_(e), res, candidateItems.slice(b),
+        baseOffset + b, jobCursor && jobCursor.pauseCount, { prevCursor: jobCursor });
     }
 
     var batchRows = [];
@@ -1910,27 +1904,10 @@ function orqExecuteGmail_(ss, run, source, jobCursor) {
 
       if (r) {
         intention = !!(r.es_solicitud_clases === true);
-        candidate = !!(intention && r.destinatario === 'pedido_abierto' && r.oportunidad_comercial_alejo === true &&
-          ['canal_publico_permitido', 'contacto_ofrecido_voluntariamente'].indexOf(r.contactabilidad) >= 0);
+        candidate = orqIsCommercialCandidate_(r);
         res.clasificados++;
         if (intention) res.solicitudes++;
         if (candidate) res.candidatos++;
-      } else if (geminiFailedNonQuota) {
-        // Evaluación por motor determinista de Core.js solo ante fallo HTTP no-cuota de Gemini
-        var ev = it._ev || { compatible: 'media', status: 'Evaluado', score: 3 };
-        intention = true;
-        candidate = (['alta', 'media'].indexOf(String(ev.compatible || '').toLowerCase()) >= 0);
-        res.clasificados++;
-        res.solicitudes++;
-        if (candidate) res.candidatos++;
-        r = {
-          destinatario: 'pedido_abierto',
-          contactabilidad: 'contacto_ofrecido_voluntariamente',
-          materia: ev.subject || it.title || '',
-          nivel: it.level || '',
-          confianza: ev.score >= 5 ? 0.9 : 0.75,
-          resumen: ev.reasons || 'Solicitud de alumno extraída de alerta de plataforma docente'
-        };
       } else {
         missingInBatch.push(it);
         return;
