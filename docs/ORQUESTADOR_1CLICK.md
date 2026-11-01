@@ -1,3 +1,5 @@
+> **AVISO 2026-11-01: documento de diseño histórico.** La documentación que dice «NO desplegado» puede estar desactualizada respecto de un despliegue STAGING posterior. Consultar [ESTADO_ACTUAL.md](ESTADO_ACTUAL.md) y cotejar Apps Script en vivo antes de usar estas instrucciones. No activar ni reemplazar una corrida pausada.
+
 # Centro de control: orquestador de un clic (STAGING)
 
 **Estado:** implementado en GitHub y probado con mocks, **todavía NO desplegado en Apps Script ni probado con APIs reales**.
