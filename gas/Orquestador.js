@@ -1563,6 +1563,31 @@ function orqHydrateGmailThread_(rawThread) {
   throw new Error('GmailApp.search no entregó un GmailThread válido; revisar versión desplegada, adaptadores y serialización del estado (sin datos del correo).');
 }
 
+/**
+ * Identidad estable de una solicitud recuperada desde Gmail.
+ * Un mismo aviso de Tusclases puede venir en múltiples emails/enlaces de
+ * seguimiento: deduplicar por ID de anuncio, no por URL completa ni msgId.
+ * No reemplazar el enlace de contacto mostrado al usuario.
+ */
+function orqGmailStableId_(item, msgId) {
+  var it = item || {};
+  if (it.id) return String(it.id);
+  var raw = String(it.url || '');
+  var canonical = typeof canonicalUrl === 'function' ? canonicalUrl(raw) : raw;
+  var tusMatch = canonical.match(/tusclases\.com(?:\.[a-z]{2,})?\/[^?#]*?(\d{5,})\.aspx(?:[?#]|$)/i) ||
+    canonical.match(/tusclases\.com(?:\.[a-z]{2,})?\/[^#]*?[?&]id=(\d{5,})(?:[&#]|$)/i);
+  if (tusMatch) return 'GMAIL-TUSCLASES-' + tusMatch[1];
+
+  var generic = typeof isGenericDashboardUrl === 'function' ?
+    isGenericDashboardUrl(canonical) : /\/(?:inbox|mensajes|panel|dashboard|tupantalla)(?:[?#]|\/?$)/i.test(canonical);
+  if (canonical && !generic && /^https?:\/\//i.test(canonical)) {
+    return 'GMAIL-' + orqHash_(String(it.source || 'gmail') + '|' + canonical);
+  }
+  // Nunca fusionar dos pedidos por compartir solo el nombre o el asunto.
+  return 'GMAIL-' + orqHash_(String(it.source || 'gmail') + '|' +
+    String(it.msgId || msgId || '') + '|' + String(it.title || '').slice(0, 100));
+}
+
 function orqExecuteGmail_(ss, run, source, jobCursor) {
   var tick = Date.now(), p = PropertiesService.getScriptProperties(), cfg = orqLoadConfig_();
   var gemKey = orqApiKey_('GEMINI_API_KEY');
@@ -1575,6 +1600,7 @@ function orqExecuteGmail_(ss, run, source, jobCursor) {
 
   var known = orqSeen_(ss);
   var candidateItems = [];
+  var queuedThisExecution = {};
   var baseOffset = 0;
 
   if (jobCursor && Array.isArray(jobCursor.pendingItems) && jobCursor.pendingItems.length > 0) {
@@ -1643,8 +1669,9 @@ function orqExecuteGmail_(ss, run, source, jobCursor) {
           }
 
           extracted.items.forEach(function(it) {
-            var id = it.id || ('GMAIL-' + orqHash_(it.url || (m.getId() + '_' + it.title)));
-            if (known[id]) { res.repetidos++; return; }
+            var id = orqGmailStableId_(it, m.getId());
+            if (known[id] || queuedThisExecution[id]) { res.repetidos++; return; }
+            queuedThisExecution[id] = true;
 
             // Evaluar calidad con evaluate() de Core.js
             var ev = typeof evaluate === 'function' ?
