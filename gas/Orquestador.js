@@ -523,14 +523,14 @@ function orqPreviewPilotoComercial() {
     { id: 'CAT-0002', razon: 'Alertas Tusclases (NO rastrea sitemap ni web)' },
     { id: 'CAT-0086', razon: 'Consultas Superprof (excluir confirmaciones administrativas)' },
     { id: 'CAT-0066', razon: 'Solicitudes abiertas en RSS UTNianos' },
-    { id: 'CAT-0036', razon: 'Grupo control YouTube de audiencia CBC' }
+    { id: 'CAT-0240', razon: 'Solicitudes preseleccionadas desde hoja manual, sin scraping' }
   ];
   var byId = {};
   configured.forEach(function(s) { byId[s.id] = s; });
   var items = requested.map(function(entry) {
     var s = byId[entry.id] || null;
     var ready = !!s && s.enabled === true &&
-      ['gmail_alertas', 'rss_foros', 'youtube_canales'].indexOf(s.connector) >= 0 &&
+      ['gmail_alertas', 'rss_foros', 'youtube_canales', 'solicitudes_verificadas'].indexOf(s.connector) >= 0 &&
       s.verificationState !== 'FALLO';
     return {
       id: entry.id,
@@ -571,7 +571,7 @@ function orqStart(sourceIds, maxComments) {
     // Cargar fuentes del catálogo
     var all = orqSources_(ss);
     var functional = all.filter(function(s) {
-      return ['youtube_canales', 'rss_foros', 'gmail_alertas'].indexOf(s.connector) >= 0;
+      return ['youtube_canales', 'rss_foros', 'gmail_alertas', 'solicitudes_verificadas'].indexOf(s.connector) >= 0;
     });
 
     if (Array.isArray(sourceIds) && sourceIds.length === 0) {
@@ -912,6 +912,8 @@ function orqTick() {
         result = orqExecuteRss_(ss, run, source, job.cursor);
       } else if (job.connector === 'gmail_alertas') {
         result = orqExecuteGmail_(ss, run, source, job.cursor);
+      } else if (job.connector === 'solicitudes_verificadas') {
+        result = orqExecuteSolicitudesVerificadas_(ss, run, source, job.cursor);
       } else {
         result = { estado: 'OMITIDO: conector no implementado', leidos: 0, repetidos: 0, clasificados: 0, solicitudes: 0, candidatos: 0, errores: 0, youtube: 0, gemini: 0, mensaje: '' };
       }
@@ -1576,6 +1578,9 @@ function orqGmailStableId_(item, msgId) {
   var it = item || {};
   if (it.id) return String(it.id);
   var raw = String(it.url || '');
+  // Compartir el mismo ID canónico con solicitudes introducidas manualmente.
+  var manualId = typeof orqManualAdId_ === 'function' ? orqManualAdId_(raw) : '';
+  if (manualId) return 'GMAIL-TUSCLASES-' + manualId;
   var canonical = typeof canonicalUrl === 'function' ? canonicalUrl(raw) : raw;
   var tusMatch = canonical.match(/tusclases\.com(?:\.[a-z]{2,})?\/[^?#]*?(\d{5,})\.aspx(?:[?#]|$)/i) ||
     canonical.match(/tusclases\.com(?:\.[a-z]{2,})?\/[^#]*?[?&]id=(\d{5,})(?:[&#]|$)/i);
@@ -1599,10 +1604,10 @@ function orqTusclasesIds_(input) {
   var s = String(input || '').replace(/&amp;/gi, '&');
   var result = {};
   for (var i = 0; i < 4; i++) {
-    var regex = /tusclases\.com(?:\.ar)?\/[^\s"'<>]{0,500}?(\d{5,})\.aspx(?:[?#/&]|$)/gi;
+    var regex = /(?:tusclases\.(?:com\.ar|com|co|pe|mx)|tusclasesparticulares\.(?:cl|com))\/[^\s"'<>]{0,500}?(\d{5,})\.aspx(?:[?#/&]|$)/gi;
     var hit;
     while ((hit = regex.exec(s)) !== null) result[hit[1]] = true;
-    var query = /tusclases\.com(?:\.ar)?\/[^\s"'<>]{0,500}?[?&]id=(\d{5,})(?:[&#\s]|$)/gi;
+    var query = /(?:tusclases\.(?:com\.ar|com|co|pe|mx)|tusclasesparticulares\.(?:cl|com))\/[^\s"'<>]{0,500}?[?&]id=(\d{5,})(?:[&#\s]|$)/gi;
     while ((hit = query.exec(s)) !== null) result[hit[1]] = true;
     try {
       var decoded = decodeURIComponent(s);
