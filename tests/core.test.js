@@ -1169,10 +1169,10 @@ test('legacy YouTube: desactivar todas las fuentes en Sheets no dispara fallback
   env.setConfig_('YOUTUBE_ACTIVO', true);
   env.setYouTubeApiKey('test-key');
   assert.ok(env.sheets['Fuentes'].data.slice(1).every(r => String(r[7]).toUpperCase() === 'FALSE'));
-  const before = env.fetched.length;
   const st = env.runCycle({ noNotify: true });
   assert.equal(st.err.length, 0);
-  assert.equal(env.fetched.length, before, 'ninguna llamada de red con fuentes desactivadas');
+  assert.equal(env.fetched.filter(url => /youtube\/v3\/|youtube\.googleapis\.com/i.test(url)).length,
+    0, 'no consulta YouTube si ninguna fuente está activa (otros feeds pueden operar)');
   assert.equal(env.sheets['Oportunidades'].data.length, 1);
 });
 
