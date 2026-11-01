@@ -593,6 +593,56 @@ test('regresión: dos fuentes Gmail consecutivas no reutilizan objetos GmailThre
   assert.equal(env.ctx.orqStatus().estado, 'FINALIZADO');
 });
 
+function addGmailFixture_(env, id) {
+  env.sheets.Fuentes.rows.push([
+    id, 'Tusclases', 'Alertas docente', 'Matemática', 'CBC',
+    'https://www.tusclases.com.ar', '', true, 'gmail_autorizado',
+    'P0', 'DISPONIBLE', 'gmail_alertas', 'Consulta directa'
+  ]);
+}
+
+test('regresión Gmail: rehidrata descriptor con ID en lugar de llamar getMessages sobre JSON', () => {
+  const env = createMockEnv();
+  addGmailFixture_(env, 'GM-SERIAL');
+  const realSearch = env.ctx.GmailApp.search;
+  const realThread = realSearch()[0];
+  const expectedId = realThread.getId();
+  env.ctx.GmailApp.search = () => [{ id: expectedId }];
+  env.ctx.GmailApp.getThreadById = id => id === expectedId ? realThread : null;
+
+  env.ctx.orqStart(['GM-SERIAL'], 10);
+  const rows = env.sheets.OrqFuentes.rows.slice(1);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0][5], 'OK');
+  assert.ok(env.sheets.OrqHallazgos.rows.slice(1).some(row => row[2] === 'Gmail'));
+  assert.equal(env.ctx.orqStatus().estado, 'FINALIZADO');
+});
+
+test('regresión Gmail: falla de forma explícita y sin filtrar IDs cuando la búsqueda entrega objetos inválidos', () => {
+  const env = createMockEnv();
+  addGmailFixture_(env, 'GM-INVALID');
+  env.ctx.GmailApp.search = () => [{ payload: 'descriptor-no-compatible' }];
+
+  env.ctx.orqStart(['GM-INVALID'], 10);
+  const rows = env.sheets.OrqFuentes.rows.slice(1);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0][5], 'ERROR_GMAIL');
+  assert.match(String(rows[0][15]), /GmailThread válido/);
+  assert.ok(!String(rows[0][15]).includes('descriptor-no-compatible'));
+  assert.equal(env.sheets.OrqHallazgos.rows.length, 1);
+});
+
+test('regresión Gmail: no acepta respuestas de búsqueda no iterables', () => {
+  const env = createMockEnv();
+  addGmailFixture_(env, 'GM-NONARRAY');
+  env.ctx.GmailApp.search = () => ({ metadata: 'not-an-array' });
+
+  env.ctx.orqStart(['GM-NONARRAY'], 10);
+  const rows = env.sheets.OrqFuentes.rows.slice(1);
+  assert.equal(rows[0][5], 'ERROR_GMAIL');
+  assert.match(String(rows[0][15]), /lista de conversaciones/);
+});
+
 test('regresión: cuota vencida no dispara reintentos infinitos ni progreso ficticio', () => {
   const env = createMockEnv();
   env.ctx.orqStart(['YT-01', 'YT-02'], 10);
