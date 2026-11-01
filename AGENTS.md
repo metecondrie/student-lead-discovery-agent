@@ -28,6 +28,12 @@ Antes de recomendar un alumno como *nuevo y contactable*, ejecutar esta comproba
 
 Estados sugeridos: `NUEVO_VERIFICADO` solo si las fuentes de contacto necesarias fueron realmente consultadas; `CONTACTADO_CONFIRMADO`; `INCIERTO_VERIFICAR_EN_PLATAFORMA`; `DESCARTADO`. En el caso de acceso incompleto, preferir `INCIERTO`.
 
+## Control de contactos (actualizado 2026-11-01)
+- Antes de proponer un primer mensaje, consultar [auditoría de contactos y protocolo](docs/AUDITORIA_CONTACTOS_2026-11-01.md).
+- En la rama del [PR #12](https://github.com/metecondrie/student-lead-discovery-agent/pull/12), `CONTACTADO_CONFIRMADO` queda fuera del primer contacto, mientras `VERIFICAR_CONTACTO` debe mostrarse como **pendiente de comprobar mensajes internos**, nunca «libre para escribir».
+- Los comprobantes de Tusclases recibidos en Gmail son evidencia de envío, incluso cuando falta la fila en `Contactados`. La ausencia de resultados en Gmail/CRM no prueba ausencia de conversaciones dentro de la plataforma.
+- La vista de diagnóstico de contactos devuelve **solo cantidades agregadas**. No copiar correos, URLs individuales ni identificadores de estudiantes al repositorio público.
+
 ## Cómo trabajar sobre el código
 - Clonar/abrir la rama candidata indicada arriba; comprobar luego `git status`, `git log`, diff y existencia de cambios locales antes de editar.
 - Usar `npm test` para las pruebas Node. Las pruebas son simuladas: además se necesita ensayo controlado con cuota real, logs de APIs y muestras de datos anónimos.
