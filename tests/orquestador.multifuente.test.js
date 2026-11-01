@@ -1250,3 +1250,30 @@ test('recuperación 3: cuota diaria real RPD programada tras reinicio del Pacíf
   assert.equal(st77.metricas.errores, 0, 'las 25 filas históricas PAUSADO_CUOTA con errores=1 no inflan metricas.errores');
   assert.equal(st77.metricas.detalles.length, 3, 'las filas históricas PAUSADO_CUOTA vacías no contaminan detalles');
 });
+
+test('regresión seguridad: nueva corrida no puede sobrescribir ORQ_RUN pausada o recuperable', () => {
+  const env = createMockEnv();
+  env.ctx.orqStart(['YT-01', 'YT-02'], 10);
+  env.stats.gem = 50;
+  env.ctx.orqTick();
+  const paused = env.ctx.orqStatus();
+  assert.equal(paused.estado, 'PAUSADO_CUOTA');
+  const runBefore = env.props.ORQ_RUN;
+  const queueBefore = env.sheets.OrqCola.rows.length;
+  assert.throws(
+    () => env.ctx.orqStart(['YT-01'], 10),
+    /activa o pendiente de recuperación/
+  );
+  assert.equal(env.props.ORQ_RUN, runBefore);
+  assert.equal(env.sheets.OrqCola.rows.length, queueBefore);
+
+  const state = JSON.parse(runBefore);
+  state.estado = 'INCOMPLETO_RECUPERABLE';
+  env.props.ORQ_RUN = JSON.stringify(state);
+  assert.throws(
+    () => env.ctx.orqStart(['RSS-01'], 10),
+    /activa o pendiente de recuperación/
+  );
+  assert.equal(JSON.parse(env.props.ORQ_RUN).id, state.id);
+  assert.equal(env.sheets.OrqCola.rows.length, queueBefore);
+});
