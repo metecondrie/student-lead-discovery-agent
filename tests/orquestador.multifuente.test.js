@@ -988,7 +988,7 @@ test('regresión: cuota vencida no dispara reintentos infinitos ni progreso fict
 });
 
 
-test('regresión F-01: RSS clasificado Alta por reglas se conserva para revisión cuando falla Gemini (error 500 no-cuota)', () => {
+test('regresión F-01: RSS no inventa un candidato ni un canal de contacto cuando falla Gemini', () => {
   const env = createMockEnv({ failGeminiServer: true });
   env.ctx.evaluate = () => ({
     compatible: 'Alta', status: 'Pendiente de aprobación',
@@ -996,12 +996,14 @@ test('regresión F-01: RSS clasificado Alta por reglas se conserva para revisió
   });
   env.ctx.orqStart(['RSS-01'], 10);
   const st = env.ctx.orqStatus();
-  assert.equal(st.metricas.candidatos, 1);
-  const rows = env.sheets.OrqHallazgos.rows.slice(1);
-  assert.ok(rows.some(r => r[11] === 'REVISAR' && r[2] === 'Foros'));
+  assert.equal(st.estado, 'FINALIZADO');
+  assert.equal(st.metricas.candidatos, 0);
+  assert.equal(env.sheets.OrqCola.rows[1][5], 'ERROR');
+  assert.equal(env.sheets.OrqHallazgos.rows.length, 1, 'sin filas de contacto falsas');
+  assert.match(String(env.sheets.OrqFuentes.rows[1][15]), /ERROR_GEMINI/);
 });
 
-test('regresión F-01: Gmail clasificado Media por reglas se conserva para revisión cuando falla Gemini (error 500 no-cuota)', () => {
+test('regresión F-01: Gmail no atribuye contacto voluntario ni confianza cuando Gemini devuelve 500', () => {
   const env = createMockEnv({ failGeminiServer: true });
   env.sheets.Fuentes.rows.push([
     'GM-ALT', 'Tusclases', 'Avisos particulares', 'Matemática', 'CBC',
@@ -1014,9 +1016,11 @@ test('regresión F-01: Gmail clasificado Media por reglas se conserva para revis
   });
   env.ctx.orqStart(['GM-ALT'], 10);
   const st = env.ctx.orqStatus();
-  assert.equal(st.metricas.candidatos, 1);
-  const rows = env.sheets.OrqHallazgos.rows.slice(1);
-  assert.ok(rows.some(r => r[11] === 'VERIFICAR_CONTACTO' && r[2] === 'Gmail'), 'solicitud apta pero aún pendiente de comprobar mensajería interna');
+  assert.equal(st.estado, 'FINALIZADO');
+  assert.equal(st.metricas.candidatos, 0);
+  assert.equal(env.sheets.OrqCola.rows[1][5], 'ERROR');
+  assert.equal(env.sheets.OrqHallazgos.rows.length, 1, 'sin confianza o contacto inventados');
+  assert.match(String(env.sheets.OrqFuentes.rows[1][15]), /ERROR_GEMINI/);
 });
 
 test('control RPM: espacia las solicitudes Gemini sucesivas sin modificar el cupo diario', () => {
