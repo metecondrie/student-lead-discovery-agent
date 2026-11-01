@@ -1383,6 +1383,31 @@ function orqExecuteRss_(ss, run, source, jobCursor) {
   return res;
 }
 
+/**
+ * GmailApp.search() entrega objetos GmailThread. Si un adaptador o una corrida
+ * antigua entregara descriptores serializados, intentar rehidratar por ID.
+ * No almacenar GmailThread ni GmailMessage en Script Properties.
+ * No incluir IDs ni contenido de correos en mensajes de error.
+ */
+function orqHydrateGmailThread_(rawThread) {
+  if (rawThread && typeof rawThread.getMessages === 'function' &&
+      typeof rawThread.getId === 'function') {
+    return rawThread;
+  }
+  var id = '';
+  if (typeof rawThread === 'string') id = rawThread;
+  else if (rawThread && typeof rawThread === 'object') {
+    id = String(rawThread.threadId || rawThread.id || '');
+  }
+  if (id && typeof GmailApp !== 'undefined' &&
+      typeof GmailApp.getThreadById === 'function') {
+    var rehydrated = GmailApp.getThreadById(id);
+    if (rehydrated && typeof rehydrated.getMessages === 'function' &&
+        typeof rehydrated.getId === 'function') return rehydrated;
+  }
+  throw new Error('GmailApp.search no entregó un GmailThread válido; revisar versión desplegada, adaptadores y serialización del estado (sin datos del correo).');
+}
+
 function orqExecuteGmail_(ss, run, source, jobCursor) {
   var tick = Date.now(), p = PropertiesService.getScriptProperties(), cfg = orqLoadConfig_();
   var gemKey = orqApiKey_('GEMINI_API_KEY');
@@ -1437,8 +1462,12 @@ function orqExecuteGmail_(ss, run, source, jobCursor) {
       // getMessages()/getId(). No cachearlo en el estado serializado entre triggers.
       // Reconsultar una búsqueda acotada y deduplicar resultados en la planilla.
       var threads = typeof GmailApp !== 'undefined' ? GmailApp.search(query, 0, 15) : [];
+      if (!Array.isArray(threads)) {
+        throw new Error('GmailApp.search no devolvió una lista de conversaciones; revisar versión y adaptadores.');
+      }
 
-      threads.forEach(function(th) {
+      threads.forEach(function(rawThread) {
+        var th = orqHydrateGmailThread_(rawThread);
         var msgs = th.getMessages();
         msgs.forEach(function(m) {
           res.leidos++;
