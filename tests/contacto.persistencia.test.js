@@ -757,3 +757,78 @@ test('17. Paginación y nextPageToken: orqSearchGmail_ recorre páginas y declar
   assert.equal(syncRes.nextPageToken, 'token_mas_comprobantes');
   assert.equal(syncRes.nuevosContactosIncorporados, 50);
 });
+
+test('18. Diagnóstico de contactos: orqEjecutarDiagnosticoContactos imprime informe agregado sin escribir en sheets', () => {
+  const env = createMockEnv();
+
+  // Mock de 2 comprobantes en Gmail para 2 anuncios distintos
+  const mockReceipt = (id, adId) => ({
+    id: 'th-' + id,
+    messages: [{
+      id: 'msg-' + id,
+      threadId: 'th-' + id,
+      internalDate: '1730476800000',
+      payload: {
+        mimeType: 'text/plain',
+        headers: [
+          { name: 'Subject', value: 'Mensaje desde tusclases.co: Consulta' },
+          { name: 'From', value: 'no-reply@tusclases.co' }
+        ],
+        body: {
+          data: Buffer.from('Tu mensaje al anunciante de: Química se ha enviado correctamente. https://www.tusclases.co/solicitud-' + adId + '.aspx', 'utf8').toString('base64url')
+        }
+      }
+    }]
+  });
+
+  const threads = {
+    'th-1': mockReceipt('1', '2466833'),
+    'th-2': mockReceipt('2', '2466834')
+  };
+
+  env.ctx.Gmail = {
+    Users: {
+      Threads: {
+        list: () => ({
+          threads: [{ id: 'th-1' }, { id: 'th-2' }],
+          resultSizeEstimate: 2
+        }),
+        get: (userId, id) => threads[id] || null
+      }
+    }
+  };
+
+  // Interceptar console.log para verificar que se imprime el JSON
+  const logged = [];
+  const originalLog = env.ctx.console.log;
+  env.ctx.console.log = (...args) => {
+    logged.push(args.join(' '));
+    originalLog.apply(env.ctx.console, args);
+  };
+
+  const initialRowCount = env.sheets.Contactados.rows.length;
+  const diag = env.ctx.orqEjecutarDiagnosticoContactos();
+
+  // 1. Modo estricto SOLO_LECTURA y no escribe en hojas
+  assert.equal(diag.modo, 'SOLO_LECTURA');
+  assert.equal(env.sheets.Contactados.rows.length, initialRowCount, 'No debe escribir filas en Contactados');
+
+  // 2. Comprobación de campos requeridos
+  assert.equal(typeof diag.confirmacionesGmail, 'number', 'Debe informar cantidad de comprobantes');
+  assert.equal(diag.confirmacionesGmail, 2);
+  assert.equal(typeof diag.anunciosUnicosConfirmaciones, 'number', 'Debe informar anuncios únicos');
+  assert.equal(diag.anunciosUnicosConfirmaciones, 2);
+  assert.equal(typeof diag.anunciosConfirmadosNoRegistradosEnCRM, 'number', 'Debe informar comprobantes faltantes en CRM');
+  assert.equal(diag.anunciosConfirmadosNoRegistradosEnCRM, 2);
+  assert.ok(diag.fuentesConsultadas, 'Debe informar fuentes consultadas');
+  assert.equal(diag.fuentesConsultadas.contactados, true);
+  assert.equal(diag.fuentesConsultadas.gmailRecibidos, true);
+  assert.equal(typeof diag.revisionIncompleta, 'boolean', 'Debe informar si la revisión quedó incompleta');
+  assert.equal(diag.revisionIncompleta, false);
+
+  // 3. Verificación de log por consola
+  assert.ok(logged.some(msg => msg.includes('[DIAGNOSTICO CONTACTOS (SOLO LECTURA)]')));
+  assert.ok(logged.some(msg => msg.includes('"confirmacionesGmail": 2')));
+
+  env.ctx.console.log = originalLog;
+});

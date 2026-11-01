@@ -2051,7 +2051,7 @@ function orqContactHistory_(ss, opts) {
 function orqDiagnosticoContactosSoloLectura() {
   var ss = orqDb_();
   var h = orqContactHistory_(ss);
-  return {
+  var report = {
     modo: 'SOLO_LECTURA',
     contactosCRM: h.crmRows,
     contactosCRMConIdentificador: h.crmWithId,
@@ -2069,6 +2069,17 @@ function orqDiagnosticoContactosSoloLectura() {
     mensajeriaInternaVerificada: false,
     advertencia: 'Revisá las conversaciones internas antes de escribir. Este informe no envía mensajes ni edita datos.'
   };
+  console.log('[DIAGNOSTICO CONTACTOS (SOLO LECTURA)]:', JSON.stringify(report, null, 2));
+  return report;
+}
+
+/**
+ * Función auxiliar sin parámetros para ejecutar e imprimir el diagnóstico de contactos
+ * en modo SOLO LECTURA estricto desde el editor de Google Apps Script.
+ * No realiza ninguna escritura en Google Sheets ni altera ninguna hoja.
+ */
+function orqEjecutarDiagnosticoContactos() {
+  return orqDiagnosticoContactosSoloLectura();
 }
 
 function orqContactDecision_(item, history) {
@@ -2973,6 +2984,7 @@ if (typeof module !== 'undefined') {
     orqContactDecision_: orqContactDecision_,
     orqIsContacted_: orqIsContacted_,
     orqDiagnosticoContactosSoloLectura: orqDiagnosticoContactosSoloLectura,
+    orqEjecutarDiagnosticoContactos: orqEjecutarDiagnosticoContactos,
     orqRecordManualContact: orqRecordManualContact,
     orqRevertManualContact: orqRevertManualContact,
     orqSyncContactReceipts: orqSyncContactReceipts,
