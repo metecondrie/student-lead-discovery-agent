@@ -1814,6 +1814,24 @@ function orqExecuteGmail_(ss, run, source, jobCursor) {
     }
   }
 
+  // Control previo obligatorio: evitar gastar Gemini en alumnos ya contactados.
+  // Las coincidencias exactas en Contactados/comprobantes se excluyen;
+  // las demás se muestran solo como PENDIENTE DE VERIFICAR, jamás como libres.
+  if (candidateItems.length) {
+    var contactHistory = orqContactHistory_(ss);
+    var pendingReview = [];
+    candidateItems.forEach(function(it) {
+      var decision = orqContactDecision_(it, contactHistory);
+      if (decision === 'CONTACTADO_CONFIRMADO') {
+        res.repetidos++;
+        return;
+      }
+      it._contactCheck = decision;
+      pendingReview.push(it);
+    });
+    candidateItems = pendingReview;
+  }
+
   // Clasificación con Gemini por lotes, persistiendo progreso parcial y respetando pausas de cuota
   var model = String(cfg.GEMINI_MODEL || 'gemini-3.5-flash-lite');
 
@@ -1887,8 +1905,10 @@ function orqExecuteGmail_(ss, run, source, jobCursor) {
       batchRows.push([
         run.id, new Date(), 'Gmail', source.name, it._computedId, it.url || it.gmailLink,
         pubDateStr, orqSafeText_(it.text || it.title),
-        String(intention), r.destinatario, r.contactabilidad, candidate ? 'REVISAR' : 'NO',
-        orqSafeText_(r.materia), orqSafeText_(r.nivel), r.confianza, orqSafeText_(r.resumen)
+        String(intention), r.destinatario, r.contactabilidad, candidate ? 'VERIFICAR_CONTACTO' : 'NO',
+        orqSafeText_(r.materia), orqSafeText_(r.nivel), r.confianza,
+        orqSafeText_((r.resumen || '') + (candidate ? ' [CONTROL CONTACTO: ' +
+          (it._contactCheck || 'VERIFICACION_INCOMPLETA') + ']' : ''))
       ]);
     });
 
