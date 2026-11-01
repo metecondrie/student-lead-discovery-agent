@@ -1162,6 +1162,20 @@ test('Hoja Fuentes: setup() crea la hoja Fuentes con encabezados y fuentes prede
   assert.ok(rows.every(r => r[7] === 'FALSE'), 'Todas las fuentes precargadas de YouTube deben comenzar con Activo = FALSE');
 });
 
+test('legacy YouTube: desactivar todas las fuentes en Sheets no dispara fallback oculto', () => {
+  const env = makeEnv({ threads: [], feeds: {}, me: 'demo@example.test' });
+  ctxRef.env = env;
+  env.setup(); env.setConfig_('SISTEMA_ACTIVO', true);
+  env.setConfig_('YOUTUBE_ACTIVO', true);
+  env.setYouTubeApiKey('test-key');
+  assert.ok(env.sheets['Fuentes'].data.slice(1).every(r => String(r[7]).toUpperCase() === 'FALSE'));
+  const before = env.fetched.length;
+  const st = env.runCycle({ noNotify: true });
+  assert.equal(st.err.length, 0);
+  assert.equal(env.fetched.length, before, 'ninguna llamada de red con fuentes desactivadas');
+  assert.equal(env.sheets['Oportunidades'].data.length, 1);
+});
+
 test('Integración YouTube: runCycle procesa comentarios de YouTube, filtra ruido y deduplica', () => {
   const ytApiResponse = {
     kind: 'youtube#commentThreadListResponse',
@@ -1211,6 +1225,10 @@ test('Integración YouTube: runCycle procesa comentarios de YouTube, filtra ruid
 
   // Activar YouTube y configurar API Key
   env.setConfig_('YOUTUBE_ACTIVO', true);
+  // La hoja Fuentes se configuró explícitamente: no se usa fallback embebido.
+  const youtubeRow = env.sheets['Fuentes'].data.find(r => r[0] === 'CAT-0178');
+  assert.ok(youtubeRow, 'la configuración de fuentes existe');
+  youtubeRow[7] = true;
   env.setYouTubeApiKey('test-key');
 
   // Ejecución ciclo normal
@@ -1264,6 +1282,10 @@ test('Integración YouTube: probarSinEnviar() en simulación estricta no modific
   ctxRef.env = env;
   env.setup(); env.setConfig_('SISTEMA_ACTIVO', true); /* habilitación explícita solo en test */
   env.setConfig_('YOUTUBE_ACTIVO', true);
+  // La hoja Fuentes se configuró explícitamente: no se usa fallback embebido.
+  const youtubeRow = env.sheets['Fuentes'].data.find(r => r[0] === 'CAT-0178');
+  assert.ok(youtubeRow, 'la configuración de fuentes existe');
+  youtubeRow[7] = true;
   env.setYouTubeApiKey('test-key');
 
   const stSim = env.probarSinEnviar();
@@ -1282,6 +1304,10 @@ test('Integración YouTube: fallo de red en YouTube API no bloquea el ciclo ni o
   ctxRef.env = env;
   env.setup(); env.setConfig_('SISTEMA_ACTIVO', true); /* habilitación explícita solo en test */
   env.setConfig_('YOUTUBE_ACTIVO', true);
+  // La hoja Fuentes se configuró explícitamente: no se usa fallback embebido.
+  const youtubeRow = env.sheets['Fuentes'].data.find(r => r[0] === 'CAT-0178');
+  assert.ok(youtubeRow, 'la configuración de fuentes existe');
+  youtubeRow[7] = true;
   env.setYouTubeApiKey('test-key');
 
   const st = env.runCycle({ noNotify: true });
@@ -1627,7 +1653,9 @@ test('Auditoría 5 Gemini integración: cola persistente _cola_ia y procesamient
           content: {
             parts: [{
               text: JSON.stringify([
-                { id: 'Q1', es_solicitud_clases: true, materia: 'Biofísica', nivel: 'CBC', urgencia: 'alta', confianza: 0.9, resumen: 'Preparar parcial CBC' }
+                { id: 'Q1', es_solicitud_clases: true, destinatario: 'pedido_abierto',
+                  contactabilidad: 'canal_publico_permitido', oportunidad_comercial_alejo: true,
+                  materia: 'Biofísica', nivel: 'CBC', urgencia: 'alta', confianza: 0.9, resumen: 'Preparar parcial CBC' }
               ])
             }]
           }
