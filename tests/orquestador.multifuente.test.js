@@ -1351,6 +1351,21 @@ test('recuperación 3: cuota diaria real RPD programada tras reinicio del Pacíf
   env77.ctx.orqUpdateRunRow_(ss77, JSON.parse(env77.props.ORQ_RUN));
   assert.equal(env77.sheets.OrqCorridas.rows[1][5], 3,
     'fuentes completas deben coincidir con 3 trabajos COMPLETADO de OrqCola, no 4 filas OK históricas');
+  // Una versión antigua dejó un trabajo en cola COMPLETADO, pero su resultado
+  // final fue ERROR_GMAIL. Debe quedar excluido del total verificado.
+  env77.sheets.OrqCola.rows.find(row => row[2] === 'SRC-6')[5] = 'COMPLETADO';
+  env77.sheets.OrqFuentes.rows.push([
+    runId77, new Date(), 'SRC-6', 'Gmail roto', 'gmail_alertas', 'ERROR_GMAIL',
+    0, 0, 0, 0, 0, 1, 0, 0, 1.0, 'thread inválido'
+  ]);
+  const reconciled = env77.ctx.orqTotals_(ss77, runId77);
+  assert.equal(reconciled.completados, 4, 'la cola cruda conserva 4 estados COMPLETADO');
+  assert.equal(reconciled.completadosVerificados, 3, 'se excluye el falso completado');
+  assert.equal(reconciled.discrepanciasEstado, 1);
+  env77.ctx.orqUpdateRunRow_(ss77, JSON.parse(env77.props.ORQ_RUN));
+  assert.equal(env77.sheets.OrqCorridas.rows[1][5], 3,
+    'el resumen exige que cola y último registro coincidan');
+
 
 });
 
