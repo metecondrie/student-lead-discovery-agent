@@ -1,3 +1,5 @@
+> **AVISO 2026-11-01: documento histórico.** La fuente de verdad para reanudar el proyecto es [ESTADO_ACTUAL.md](ESTADO_ACTUAL.md). Verificar despliegue y corridas en vivo; no ejecutar instrucciones de instalación sin aprobación. Se retiraron identificadores de STAGING del texto público; pueden persistir referencias en código y en el historial.
+
 # Plan de cierre: Buscador autónomo multifuente de alumnos
 
 **Actualizado:** 2026-10-30. **Estado:** Arquitectura unificada e implementada en rama `feature/orquestador-multifuente`.
@@ -40,8 +42,8 @@ El catálogo maestro consolidado en `gas/Catalogo.js` (`MASTER_CATALOG_SOURCES`)
 ## 3. Guía de Instalación del Panel Privado en STAGING
 
 ### Requisitos previos:
-- Script ID de STAGING: `1pSc_IQQDZSQFm5z-NY25eSWjyXxYF8DvUl1eOphDmq2pmY94zP62e_05`
-- Planilla STAGING (`SHEET_ID`): `1lBngu6x9YLSkUO_vzFZ09_uarJcgFxoyfqZma9Tr4_Q`
+- Script ID de STAGING: `CONSULTAR_ENTORNO_PRIVADO`
+- Planilla STAGING (`SHEET_ID`): `CONSULTAR_ENTORNO_PRIVADO`
 - `Script Properties` configuradas: `SHEET_ID`, `YOUTUBE_API_KEY`, `GEMINI_API_KEY`.
 - Banderas en hoja `Config`: `SISTEMA_ACTIVO = FALSE` (evita la activación del motor desatendido antiguo).
 
