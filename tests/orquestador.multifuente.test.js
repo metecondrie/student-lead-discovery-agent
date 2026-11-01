@@ -607,3 +607,35 @@ test('regresión: cuota vencida no dispara reintentos infinitos ni progreso fict
   assert.equal(env.ctx.orqStatus().estado, 'FINALIZADO');
   assert.equal(env.ctx.orqStatus().cursor, 2);
 });
+
+
+test('regresión F-01: RSS clasificado Alta por reglas se conserva para revisión cuando falla Gemini', () => {
+  const env = createMockEnv({ failGeminiQuota: true });
+  env.ctx.evaluate = () => ({
+    compatible: 'Alta', status: 'Pendiente de aprobación',
+    score: 85, subject: 'Química', reasons: 'Solicitud abierta'
+  });
+  env.ctx.orqStart(['RSS-01'], 10);
+  const st = env.ctx.orqStatus();
+  assert.equal(st.metricas.candidatos, 1);
+  const rows = env.sheets.OrqHallazgos.rows.slice(1);
+  assert.ok(rows.some(r => r[11] === 'REVISAR' && r[2] === 'Foros'));
+});
+
+test('regresión F-01: Gmail clasificado Media por reglas se conserva para revisión cuando falla Gemini', () => {
+  const env = createMockEnv({ failGeminiQuota: true });
+  env.sheets.Fuentes.rows.push([
+    'GM-ALT', 'Tusclases', 'Avisos particulares', 'Matemática', 'CBC',
+    'https://www.tusclases.com.ar', '', true, 'gmail_autorizado', 'P0',
+    'DISPONIBLE', 'gmail_alertas', 'Alertas Gmail'
+  ]);
+  env.ctx.evaluate = () => ({
+    compatible: 'Media', status: 'Pendiente de aprobación',
+    score: 65, subject: 'Matemática', reasons: 'Solicitud reciente'
+  });
+  env.ctx.orqStart(['GM-ALT'], 10);
+  const st = env.ctx.orqStatus();
+  assert.equal(st.metricas.candidatos, 1);
+  const rows = env.sheets.OrqHallazgos.rows.slice(1);
+  assert.ok(rows.some(r => r[11] === 'REVISAR' && r[2] === 'Gmail'));
+});
