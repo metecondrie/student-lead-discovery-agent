@@ -7,6 +7,7 @@ const path = require('path');
 const orqSrc = fs.readFileSync(path.join(__dirname, '../gas/Orquestador.js'), 'utf8');
 const ytSrc = fs.readFileSync(path.join(__dirname, '../gas/YouTubeCanales.js'), 'utf8');
 const catSrc = fs.readFileSync(path.join(__dirname, '../gas/Catalogo.js'), 'utf8');
+const manualSrc = fs.readFileSync(path.join(__dirname, '../gas/SolicitudesVerificadas.js'), 'utf8');
 
 const STAGING = '1lBngu6x9YLSkUO_vzFZ09_uarJcgFxoyfqZma9Tr4_Q';
 
@@ -338,6 +339,7 @@ function createMockEnv(opts = {}) {
   // Run Catalogo and YouTubeCanales in context
   vm.runInNewContext(catSrc, ctx);
   vm.runInNewContext(ytSrc, ctx);
+  vm.runInNewContext(manualSrc, ctx);
   vm.runInNewContext(orqSrc, ctx);
 
   return { ctx, props, triggers, sheets, httpRequests, stats, opts };
