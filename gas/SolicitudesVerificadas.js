@@ -16,7 +16,7 @@ var ORQ_MANUAL_MAX_ROWS = 100;
 function orqManualAdId_(value) {
   var url = String(value || '').trim();
   // Allowlist deliberada: NO seguir enlaces ni aceptar URLs arbitrarias.
-  if (!/^https:\/\/(?:www\.)?(?:tusclases\.(?:com\.ar|com|co|pe|mx)|tusclasesparticulares\.(?:cl|com))\//i.test(url)) {
+  if (!/^https:\/\/(?:www\.)?(?:tusclases\.(?:com\.ar|com|co|pe|mx)|tusclasesparticulares\.(?:cl|com))\/(?:estudiantes|estudiante-[^/?#]+|alumnos)\//i.test(url)) {
     return '';
   }
   var m = url.match(/[-/](\d{5,12})(?:\.aspx)?(?:[?#]|$)/i);
