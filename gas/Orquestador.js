@@ -400,6 +400,47 @@ function orqUpdateRunRow_(ss, run) {
 }
 
 /**
+ * Previsualización pura del piloto comercial. NO inicia la búsqueda,
+ * NO consume APIs/cuotas, NO altera hojas/triggers ni toca la corrida existente.
+ * Los conectores Gmail leen correos, no las páginas declaradas en su URL.
+ */
+function orqPreviewPilotoComercial() {
+  var ss = orqDb_();
+  var configured = orqSources_(ss);
+  var requested = [
+    { id: 'CAT-0002', razon: 'Alertas Tusclases (NO rastrea sitemap ni web)' },
+    { id: 'CAT-0086', razon: 'Consultas Superprof (excluir confirmaciones administrativas)' },
+    { id: 'CAT-0066', razon: 'Solicitudes abiertas en RSS UTNianos' },
+    { id: 'CAT-0036', razon: 'Grupo control YouTube de audiencia CBC' }
+  ];
+  var byId = {};
+  configured.forEach(function(s) { byId[s.id] = s; });
+  var items = requested.map(function(entry) {
+    var s = byId[entry.id] || null;
+    var ready = !!s && s.enabled === true &&
+      ['gmail_alertas', 'rss_foros', 'youtube_canales'].indexOf(s.connector) >= 0 &&
+      s.verificationState !== 'FALLO';
+    return {
+      id: entry.id,
+      nombre: s ? s.name : '(no configurada)',
+      conector: s ? s.connector : 'ninguno',
+      activada: !!(s && s.enabled),
+      estadoVerificacion: s ? s.verificationState : 'NO_ENCONTRADA',
+      listaParaPiloto: ready,
+      nota: entry.razon
+    };
+  });
+  return {
+    modo: 'SOLO_PREVISUALIZACION',
+    despliegueVerificado: false,
+    corridaModificada: false,
+    fuentesListas: items.filter(function(s) { return s.listaParaPiloto; }).map(function(s) { return s.id; }),
+    fuentes: items,
+    aviso: 'No iniciar una nueva corrida sin verificar primero el despliegue, los triggers y el estado recuperable de la corrida anterior.'
+  };
+}
+
+/**
  * BOTÓN «BUSCAR ALUMNOS»: Inicia una búsqueda multifuente autónoma.
  * Selecciona por defecto todas las fuentes operativas habilitadas.
  */
