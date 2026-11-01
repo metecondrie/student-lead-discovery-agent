@@ -1620,6 +1620,42 @@ test('Auditoría 5 Gemini: buildGeminiPrompt y parseGeminiResponse procesan lote
   assert.strictEqual(core.parseGeminiResponse('{"no_array": true}'), null);
 });
 
+test('puntajes: PESOS como JSON de Sheets equivale a configuración numérica', () => {
+  const now = new Date('2026-10-30T12:00:00Z');
+  const request = {
+    id: 'weights-test', source: 'tusclases', sourceLabel: 'Tusclases',
+    title: 'Busco profesor de Matemática', text: 'Busco clases online de matemática CBC para preparar final',
+    kind: 'tutoring', url: 'https://www.tusclases.com.ar/alumnos/1234567.aspx',
+    publishedAt: now
+  };
+  const numeric = core.evaluate({ ...request }, core.DEFAULT_CONFIG, now, {}, {});
+  const textConfig = { ...core.DEFAULT_CONFIG, PESOS: JSON.stringify(core.DEFAULT_CONFIG.PESOS) };
+  const stringResult = core.evaluate({ ...request }, textConfig, now, {}, {});
+  assert.ok(Number.isFinite(numeric.score));
+  assert.ok(Number.isFinite(stringResult.score));
+  assert.equal(stringResult.score, numeric.score);
+  assert.equal(stringResult.compatible, numeric.compatible);
+
+  const brokenConfig = { ...core.DEFAULT_CONFIG, PESOS: '{missing-bracket' };
+  const recovered = core.evaluate({ ...request }, brokenConfig, now, {}, {});
+  assert.equal(recovered.score, numeric.score, 'configuración inválida recupera pesos de fábrica');
+});
+
+test('simulación YouTube: no consume cuota ni visita API aunque haya fuentes habilitadas', () => {
+  const env = makeEnv({ me: 'demo@example.test' });
+  ctxRef.env = env;
+  env.setup(); env.setConfig_('SISTEMA_ACTIVO', true);
+  env.setConfig_('YOUTUBE_ACTIVO', true);
+  env.setYouTubeApiKey('test-key');
+  const row = env.sheets.Fuentes.data.find(r => r[0] === 'CAT-0178');
+  assert.ok(row);
+  row[7] = true;
+  const before = env.fetched.filter(url => /youtube\/v3\//i.test(url)).length;
+  env.probarSinEnviar();
+  const after = env.fetched.filter(url => /youtube\/v3\//i.test(url)).length;
+  assert.equal(after, before, 'simulación no consulta API YouTube');
+});
+
 test('seguridad Gemini: enums inventados nunca convierten la solicitud en contacto permitido', () => {
   const input = [
     { id: 'unrecognized', es_solicitud_clases: true,
