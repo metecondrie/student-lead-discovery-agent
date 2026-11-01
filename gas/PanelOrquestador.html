@@ -330,6 +330,9 @@
       <button id="btnStop" class="btn btn-danger" type="button" onclick="handleStop()" disabled>
         ⏹ Detener
       </button>
+      <button id="btnContactAudit" class="btn btn-secondary" type="button" onclick="handleAuditContacts()">
+        Comprobar contactos (Gmail + planilla)
+      </button>
       <button id="btnRefresh" class="btn btn-secondary" type="button" onclick="handleRefresh()">
         🔄 Consultar estado
       </button>
@@ -339,6 +342,7 @@
     </div>
 
     <div id="statusMessage" class="alert-error" role="alert"></div>
+    <p id="contactAuditSummary" class="desc" aria-live="polite">Control de contactos: todavía no consultado. No se envía ningún mensaje.</p>
 
     <div class="notice">
       <strong>Transparencia de fuentes:</strong> Las plataformas sin API autorizada (Facebook Groups, Reels de Instagram ajenos, TikTok y Reddit sin clave) permanecen registradas en el catálogo maestro (239 entradas), pero <strong>no se simulan búsquedas falsas</strong> en ellas para no violar sus condiciones de uso.
@@ -509,6 +513,7 @@
     // Botones
     $('btnStart').disabled = running || inFlight;
     $('btnPilotPreview').disabled = inFlight;
+    $('btnContactAudit').disabled = inFlight;
     $('btnStop').disabled = !running || inFlight;
     $('btnRefresh').disabled = inFlight;
     if ($('btnResume')) $('btnResume').style.display = data.estado === 'PAUSADO_CUOTA' ? 'inline-flex' : 'none';
@@ -620,6 +625,30 @@
       })
       .withFailureHandler(err => setMessage(err && err.message ? err.message : 'No se pudo preparar el piloto.'))
       .orqPreviewPilotoComercial();
+  }
+
+  function handleAuditContacts() {
+    if (inFlight) return;
+    $('contactAuditSummary').textContent = 'Leyendo comprobantes de Gmail y la hoja Contactados (sin modificar datos)…';
+    google.script.run
+      .withSuccessHandler(report => {
+        const sources = report.fuentesConsultadas || {};
+        const sourceCheck = sources.contactados && sources.gmailRecibidos && sources.gmailEnviados;
+        $('contactAuditSummary').textContent =
+          'Contactados: ' + report.contactosCRM +
+          ' (identificables: ' + report.contactosCRMConIdentificador + '). ' +
+          'Comprobantes Gmail: ' + report.confirmacionesGmail +
+          ' (sin ID: ' + report.confirmacionesSinIdentificador + '). ' +
+          'Anuncios confirmados ausentes de Contactados: ' + report.anunciosConfirmadosNoRegistradosEnCRM +
+          '. ' + (report.revisionIncompleta || !sourceCheck ? 'REVISIÓN INCOMPLETA. ' : '') +
+          'Mensajería interna: pendiente de comprobar manualmente. No se envió nada.';
+      })
+      .withFailureHandler(err => {
+        $('contactAuditSummary').textContent =
+          'No se pudo revisar Gmail y Contactados: ' + (err && err.message ? err.message : 'error de permisos') +
+          '. No se puede afirmar que ningún alumno haya sido contactado.';
+      })
+      .orqDiagnosticoContactosSoloLectura();
   }
 
   function handleStart() {
