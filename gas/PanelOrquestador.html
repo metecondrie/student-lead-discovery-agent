@@ -303,12 +303,12 @@
   <!-- 1. Acción Principal de Búsqueda -->
   <section class="card">
     <h2>1. Búsqueda de alumnos multifuente</h2>
-    <p class="desc">Un único botón para activar la búsqueda en todas las fuentes operativas habilitadas (YouTube Canales, Foros RSS y Alertas docentes en Gmail). El proceso se reanuda de forma autónoma mediante triggers aunque cierres el navegador.</p>
+    <p class="desc">Primero prepará un piloto de cuatro fuentes con bajo costo. La búsqueda completa de las 77 fuentes queda como opción avanzada y requiere confirmación. Ninguna prueba se inicia automáticamente.</p>
 
     <div class="controls-grid">
       <label class="switch-label">
-        <input type="checkbox" id="runAllEnabled" checked>
-        <span>Recorrer todas las fuentes operativas habilitadas</span>
+        <input type="checkbox" id="runAllEnabled">
+        <span>Modo exhaustivo: recorrer todas las fuentes (consume más cuota)</span>
       </label>
       <div style="display:flex; gap:10px; align-items:center; justify-content:flex-end;">
         <label for="maxComments" style="font-size:13px; font-weight:600;">Máx. items por fuente:</label>
@@ -321,11 +321,17 @@
     </div>
 
     <div class="btn-row">
+      <button id="btnPilotPreview" class="btn btn-secondary" type="button" onclick="handlePreparePilot()">
+        Preparar piloto de 4 fuentes
+      </button>
       <button id="btnStart" class="btn btn-primary" type="button" onclick="handleStart()">
         ▶ Buscar alumnos
       </button>
       <button id="btnStop" class="btn btn-danger" type="button" onclick="handleStop()" disabled>
         ⏹ Detener
+      </button>
+      <button id="btnContactAudit" class="btn btn-secondary" type="button" onclick="handleAuditContacts()">
+        Comprobar contactos (Gmail + planilla)
       </button>
       <button id="btnRefresh" class="btn btn-secondary" type="button" onclick="handleRefresh()">
         🔄 Consultar estado
@@ -336,6 +342,7 @@
     </div>
 
     <div id="statusMessage" class="alert-error" role="alert"></div>
+    <p id="contactAuditSummary" class="desc" aria-live="polite">Control de contactos: todavía no consultado. No se envía ningún mensaje.</p>
 
     <div class="notice">
       <strong>Transparencia de fuentes:</strong> Las plataformas sin API autorizada (Facebook Groups, Reels de Instagram ajenos, TikTok y Reddit sin clave) permanecen registradas en el catálogo maestro (239 entradas), pero <strong>no se simulan búsquedas falsas</strong> en ellas para no violar sus condiciones de uso.
@@ -366,7 +373,7 @@
       </div>
       <div class="metric-card">
         <div id="valCandidatos" class="metric-num" style="color:var(--green);">0</div>
-        <div class="metric-label">Candidatos para revisión</div>
+        <div class="metric-label">Solicitudes por revisar / verificar</div>
       </div>
       <div class="metric-card">
         <div id="valErrores" class="metric-num" style="color:var(--red);">0</div>
@@ -382,7 +389,7 @@
   <!-- 3. Candidatos Detectados para Revisión Humana -->
   <section class="card">
     <h2>3. Solicitudes de alumnos detectadas (revisión humana obligatoria)</h2>
-    <p class="desc">Mensajes reales clasificados con intención de clases, pedido abierto y vía de contacto permitida. Ningún mensaje se envía automáticamente.</p>
+    <p class="desc">Solicitudes para revisión humana. Si figura PENDIENTE, antes de escribir verificá los mensajes internos de la plataforma. El sistema no envía mensajes automáticamente.</p>
 
     <div class="table-container">
       <table>
@@ -393,11 +400,12 @@
             <th>Materia / Nivel</th>
             <th>Consulta / Comentario</th>
             <th>Confianza</th>
+            <th>Contacto previo</th>
             <th>Enlace original</th>
           </tr>
         </thead>
         <tbody id="candidatesTableBody">
-          <tr><td colspan="6" style="text-align:center; color:var(--muted); padding:20px;">Todavía no se encontraron candidatos calificados en esta corrida.</td></tr>
+          <tr><td colspan="7" style="text-align:center; color:var(--muted); padding:20px;">Todavía no se encontraron candidatos calificados en esta corrida.</td></tr>
         </tbody>
       </table>
     </div>
@@ -479,6 +487,7 @@
 
 <script>
   let inFlight = false;
+  let pilotIds = []; // Selección explícita en la sesión del panel; no modifica Fuentes ni Script Properties.
   const $ = id => document.getElementById(id);
   const esc = str => String(str == null ? '' : str).replace(/[&<>"']/g, c => ({
     '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
@@ -503,6 +512,8 @@
 
     // Botones
     $('btnStart').disabled = running || inFlight;
+    $('btnPilotPreview').disabled = inFlight;
+    $('btnContactAudit').disabled = inFlight;
     $('btnStop').disabled = !running || inFlight;
     $('btnRefresh').disabled = inFlight;
     if ($('btnResume')) $('btnResume').style.display = data.estado === 'PAUSADO_CUOTA' ? 'inline-flex' : 'none';
@@ -530,7 +541,7 @@
     const candidates = data.candidatos || [];
     if (!candidates.length) {
       $('candidatesTableBody').innerHTML =
-        '<tr><td colspan="6" style="text-align:center; color:var(--muted); padding:20px;">' +
+        '<tr><td colspan="7" style="text-align:center; color:var(--muted); padding:20px;">' +
         (running ? 'Buscando candidatos calificados en comentarios recientes…' : 'No se encontraron solicitudes abiertas aptas para revisión en esta corrida.') +
         '</td></tr>';
     } else {
@@ -543,6 +554,7 @@
           '<td>' + esc(c.materia) + (c.nivel ? ' · ' + esc(c.nivel) : '') + '</td>' +
           '<td>' + esc(c.texto) + '</td>' +
           '<td>' + (c.confianza ? Math.round(Number(c.confianza) * 100) + '%' : '—') + '</td>' +
+          '<td><b style="color:var(--red);">' + (c.estadoContacto === 'PENDIENTE_VERIFICAR_EN_PLATAFORMA' ? 'PENDIENTE' : 'SIN AUDITORÍA') + '</b></td>' +
           '<td>' + (urlValid ? '<a class="action-link" href="' + esc(c.url) + '" target="_blank" rel="noopener noreferrer">Ver original ↗</a>' : '—') + '</td>' +
           '</tr>';
       }).join('');
@@ -598,14 +610,65 @@
     if (data.link) $('sheetLink').href = data.link;
   }
 
+  function handlePreparePilot() {
+    if (inFlight) return;
+    pilotIds = [];
+    setMessage('Comprobando las cuatro fuentes sin iniciar ninguna búsqueda…');
+    google.script.run
+      .withSuccessHandler(preview => {
+        pilotIds = Array.isArray(preview.fuentesListas) ? preview.fuentesListas.slice() : [];
+        $('runAllEnabled').checked = false;
+        const unavailable = (preview.fuentes || []).filter(s => !s.listaParaPiloto);
+        setMessage('Piloto preparado: ' + pilotIds.length + ' fuente(s). ' +
+          (unavailable.length ? 'No disponibles: ' + unavailable.map(s => s.id).join(', ') + '. ' : '') +
+          'No se ejecutó ninguna búsqueda. Para iniciarla, revisá la selección y pulsá Buscar alumnos.');
+      })
+      .withFailureHandler(err => setMessage(err && err.message ? err.message : 'No se pudo preparar el piloto.'))
+      .orqPreviewPilotoComercial();
+  }
+
+  function handleAuditContacts() {
+    if (inFlight) return;
+    $('contactAuditSummary').textContent = 'Leyendo comprobantes de Gmail y la hoja Contactados (sin modificar datos)…';
+    google.script.run
+      .withSuccessHandler(report => {
+        const sources = report.fuentesConsultadas || {};
+        const sourceCheck = sources.contactados && sources.gmailRecibidos && sources.gmailEnviados;
+        $('contactAuditSummary').textContent =
+          'Contactados: ' + report.contactosCRM +
+          ' (identificables: ' + report.contactosCRMConIdentificador + '). ' +
+          'Comprobantes Gmail: ' + report.confirmacionesGmail +
+          ' (sin ID: ' + report.confirmacionesSinIdentificador + '). ' +
+          'Anuncios confirmados ausentes de Contactados: ' + report.anunciosConfirmadosNoRegistradosEnCRM +
+          '. ' + (report.revisionIncompleta || !sourceCheck ? 'REVISIÓN INCOMPLETA. ' : '') +
+          'Mensajería interna: pendiente de comprobar manualmente. No se envió nada.';
+      })
+      .withFailureHandler(err => {
+        $('contactAuditSummary').textContent =
+          'No se pudo revisar Gmail y Contactados: ' + (err && err.message ? err.message : 'error de permisos') +
+          '. No se puede afirmar que ningún alumno haya sido contactado.';
+      })
+      .orqDiagnosticoContactosSoloLectura();
+  }
+
   function handleStart() {
     if (inFlight) return;
+    const exhaustive = $('runAllEnabled').checked;
+    const sourceMode = exhaustive ? 'ALL_ENABLED' : pilotIds.slice();
+    if (!exhaustive && !sourceMode.length) {
+      setMessage('Prepará primero el piloto de cuatro fuentes. No se iniciará una búsqueda completa por defecto.');
+      return;
+    }
+    const question = exhaustive ?
+      '¿Confirmás iniciar la búsqueda exhaustiva en todas las fuentes habilitadas? Puede consumir bastante cuota.' :
+      '¿Confirmás iniciar el piloto de ' + sourceMode.length + ' fuente(s) seleccionadas?';
+    if (!window.confirm(question)) return;
+
     inFlight = true;
     setMessage('Iniciando búsqueda multifuente… El primer paso se procesa ahora.');
     $('btnStart').disabled = true;
 
     const maxCount = Number($('maxComments').value) || 15;
-    const sourceMode = $('runAllEnabled').checked ? 'ALL_ENABLED' : [];
 
     google.script.run
       .withSuccessHandler(res => {

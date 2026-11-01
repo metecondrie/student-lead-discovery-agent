@@ -593,6 +593,369 @@ test('regresión: dos fuentes Gmail consecutivas no reutilizan objetos GmailThre
   assert.equal(env.ctx.orqStatus().estado, 'FINALIZADO');
 });
 
+function addGmailFixture_(env, id) {
+  env.sheets.Fuentes.rows.push([
+    id, 'Tusclases', 'Alertas docente', 'Matemática', 'CBC',
+    'https://www.tusclases.com.ar', '', true, 'gmail_autorizado',
+    'P0', 'DISPONIBLE', 'gmail_alertas', 'Consulta directa'
+  ]);
+}
+
+test('diagnóstico solo lectura: cruza propiedades, cola y resumen sin tocar APIs ni datos', () => {
+  const env = createMockEnv();
+  const empty = env.ctx.orqDiagnosticoSoloLectura();
+  assert.equal(empty.versionDiagnostico, 'solo-lectura-v1');
+  assert.equal(empty.estadoScriptProperties, 'SIN_CORRIDAS');
+  assert.equal(empty.cola.trabajos, 0);
+
+  env.ctx.orqStart(['YT-01'], 10);
+  const before = JSON.stringify({
+    props: env.props,
+    sheets: Object.fromEntries(Object.keys(env.sheets).map(name => [name, env.sheets[name].rows])),
+    triggers: env.triggers.length,
+    requests: env.httpRequests.length
+  });
+  const diag = env.ctx.orqDiagnosticoSoloLectura();
+  const after = JSON.stringify({
+    props: env.props,
+    sheets: Object.fromEntries(Object.keys(env.sheets).map(name => [name, env.sheets[name].rows])),
+    triggers: env.triggers.length,
+    requests: env.httpRequests.length
+  });
+
+  assert.equal(diag.sinEfectosLaterales, true);
+  assert.equal(diag.estadoScriptProperties, 'FINALIZADO');
+  assert.equal(diag.estadoResumen, 'FINALIZADO');
+  assert.equal(diag.cola.trabajos, 1);
+  assert.equal(diag.cola.completadosCola, 1);
+  assert.equal(diag.cola.completadosVerificados, 1);
+  assert.equal(diag.completadosResumen, 1);
+  assert.equal(diag.triggersOrqTick, 0);
+  assert.equal(before, after, 'diagnóstico no modifica ninguna planilla, propiedad, trigger o HTTP');
+  assert.doesNotMatch(JSON.stringify(diag), /test-yt-key-123|test-gem-key-456|msg-01|@tusclases/);
+
+  // Simular el fallo histórico del orquestador anterior sin reejecutarlo.
+  env.sheets.OrqFuentes.rows[1][5] = 'ERROR_GMAIL';
+  const historical = env.ctx.orqDiagnosticoSoloLectura();
+  assert.equal(historical.cola.completadosCola, 1);
+  assert.equal(historical.cola.completadosVerificados, 0);
+  assert.equal(historical.cola.completadosConError, 1);
+  assert.equal(historical.cola.inconsistencias, 1);
+  assert.equal(historical.completadosResumen, 1, 'marca que el resumen guardado está desfasado');
+
+  env.sheets.OrqFuentes.rows.splice(1, 1);
+  const noLog = env.ctx.orqDiagnosticoSoloLectura();
+  assert.equal(noLog.cola.completadosSinRegistro, 1);
+  assert.equal(noLog.cola.completadosVerificados, 0);
+});
+
+test('piloto: previsualización de cuatro fuentes es de solo lectura y detecta fallas', () => {
+  const env = createMockEnv();
+  const sourceRows = [
+    ['CAT-0002', 'Tusclases', 'Avisos Tusclases', 'Matemática', 'CBC', 'https://www.tusclases.com.ar',
+      '', true, 'gmail_autorizado', 'P0', 'DISPONIBLE', 'gmail_alertas', 'Alertas'],
+    ['CAT-0086', 'Plataformas docentes', 'Superprof AR', 'Matemática', 'CBC', 'https://www.superprof.com.ar',
+      '', true, 'gmail_autorizado', 'P0', 'DISPONIBLE', 'gmail_alertas', 'Alertas'],
+    ['CAT-0066', 'Foros', 'UTNianos RSS', 'Matemática', 'UTN', 'https://www.utnianos.com.ar/foro/syndication.php',
+      '', true, 'rss_publico', 'P1', 'DISPONIBLE', 'rss_foros', 'Foro público'],
+    ['CAT-0036', 'YouTube', 'Filadd UBA', 'Matemática', 'CBC', 'https://www.youtube.com/@FiladdUBA',
+      'Z5DyEohToDs', true, 'api_oficial', 'P2', 'DISPONIBLE', 'youtube_canales', 'Canal control']
+  ];
+  sourceRows.forEach(x => env.sheets.Fuentes.rows.push(x));
+  const beforeRows = JSON.stringify(env.sheets.Fuentes.rows);
+  const beforeProps = JSON.stringify(env.props);
+  const plan = env.ctx.orqPreviewPilotoComercial();
+
+  assert.equal(plan.modo, 'SOLO_PREVISUALIZACION');
+  assert.equal(plan.corridaModificada, false);
+  assert.equal(plan.fuentes.length, 4);
+  assert.deepEqual(Array.from(plan.fuentesListas), ['CAT-0002', 'CAT-0086', 'CAT-0066', 'CAT-0036']);
+  assert.equal(JSON.stringify(env.sheets.Fuentes.rows), beforeRows);
+  assert.equal(JSON.stringify(env.props), beforeProps);
+  assert.equal(env.triggers.length, 0);
+  assert.equal(env.sheets.OrqCola, undefined);
+
+  // Una fuente con fallo declarado NO es apta: el preview jamás la activa.
+  const ytRow = env.sheets.Fuentes.rows.find(r => r[0] === 'CAT-0036');
+  ytRow[12] = 'FALLO'; // columna nueva Estado Verificacion (en este fixture se crea explícitamente)
+  env.sheets.Fuentes.rows[0][12] = 'Estado Verificacion';
+  const after = env.ctx.orqPreviewPilotoComercial();
+  assert.equal(after.fuentes.find(x => x.id === 'CAT-0036').listaParaPiloto, false);
+  assert.ok(!Array.from(after.fuentesListas).includes('CAT-0036'));
+});
+
+test('deduplicación Gmail: dos enlaces con tracking al mismo aviso de Tusclases comparten identidad', () => {
+  const env = createMockEnv();
+  const base = 'https://www.tusclases.com.ar/estudiante-matematica/solicito-profesor-2466634.aspx';
+  const first = env.ctx.orqGmailStableId_({source:'tusclases',url:base+'?utm_source=email1'}, 'email-1');
+  const second = env.ctx.orqGmailStableId_({source:'tusclases',url:base+'?utm_source=email2'}, 'email-2');
+  assert.equal(first, second);
+  assert.equal(first, 'GMAIL-TUSCLASES-2466634');
+  assert.notEqual(first, env.ctx.orqGmailStableId_({source:'tusclases',
+    url:'https://www.tusclases.com.ar/estudiante-matematica/otro-profesor-2466635.aspx'}, 'email-3'));
+
+  const dashboard = {source:'tusclases',url:'https://www.tusclases.com.ar/inbox',title:'Nueva consulta'};
+  assert.notEqual(env.ctx.orqGmailStableId_(dashboard, 'correo-A'),
+                  env.ctx.orqGmailStableId_(dashboard, 'correo-B'),
+                  'el mismo enlace genérico no autoriza fusionar dos estudiantes');
+  // Superprof envía distintas consultas con enlaces al mismo perfil del tutor.
+  // No deduplicar por ese enlace: son alumnos potencialmente diferentes.
+  const profile = {source:'superprof',url:'https://www.superprof.com.ar/profesor/perfil',
+    title:'Nueva solicitud de Matemática'};
+  assert.notEqual(env.ctx.orqGmailStableId_(profile, 'mensaje-estudiante-1'),
+                  env.ctx.orqGmailStableId_(profile, 'mensaje-estudiante-2'),
+                  'dos mensajes a un mismo perfil pueden ser dos alumnos distintos');
+});
+
+test('deduplicación Gmail: dos emails distintos del mismo aviso no gastan dos clasificaciones', () => {
+  const env = createMockEnv();
+  addGmailFixture_(env, 'GM-TRACK');
+  const base = 'https://www.tusclases.com.ar/estudiante-matematica/solicito-profesor-2466634.aspx';
+  const urls = {'email-1':base+'?utm_source=alerta1','email-2':base+'?utm_source=alerta2'};
+  const mk = id => ({
+    getId: () => 'thread-'+id,
+    getMessages: () => [{
+      getId: () => id,
+      getFrom: () => 'avisos@tusclases.com.ar',
+      getSubject: () => 'Aviso de Matemática universitaria',
+      getDate: () => new Date('2026-11-01T12:00:00Z'),
+      getPlainBody: () => 'Solicitud de clases online',
+      getBody: () => '<p>Solicitud</p>'
+    }]
+  });
+  env.ctx.GmailApp.search = () => [mk('email-1'),mk('email-2')];
+  env.ctx.extractFromEmail = email => ({items:[{
+    source:'tusclases',url:urls[email.id],title:'Matemática universitaria',
+    text:'Busco profesor particular online para preparar Matemática'
+  }]});
+  env.ctx.evaluate = () => ({compatible:'Alta',status:'Pendiente de revisión',score:90});
+
+  env.ctx.orqStart(['GM-TRACK'], 10);
+  assert.equal(env.ctx.orqStatus().estado, 'FINALIZADO');
+  const hits = env.sheets.OrqHallazgos.rows.slice(1);
+  assert.equal(hits.length, 1, 'solo un hallazgo persistido para el mismo anuncio');
+  assert.equal(hits[0][4], 'GMAIL-TUSCLASES-2466634');
+  assert.equal(env.sheets.OrqFuentes.rows[1][7], 1, 'un enlace duplicado contabilizado en repetidos');
+
+  env.ctx.orqStart(['GM-TRACK'], 10);
+  assert.equal(env.sheets.OrqHallazgos.rows.length, 2, 'otra corrida tampoco duplica el mismo anuncio');
+});
+
+
+
+test('diagnóstico de contactos: compara cantidades de Gmail y Contactados sin exponer datos', () => {
+  const env = createMockEnv();
+  const ss = env.ctx.SpreadsheetApp.openById(STAGING);
+  const sh = ss.insertSheet('Contactados');
+  sh.rows.push(['Nombre', 'Materia', 'URL', 'Fecha', 'Nota']);
+  sh.rows.push(['Nombre privado', 'Matemática',
+    'https://www.tusclases.com.ar/estudiante-matematica/solicitud-2466634.aspx',
+    '2026-10-28', '']);
+
+  const mockReceipt = (id, num) => ({
+    getId: () => 'th-' + id,
+    getMessages: () => [{
+      getSubject: () => 'Mensaje desde tusclases.com.ar: confirmación',
+      getPlainBody: () => 'Tu mensaje se ha enviado correctamente. ' +
+        'https://www.tusclases.com.ar/estudiante-matematica/solicitud-' + num + '.aspx'
+    }]
+  });
+  env.ctx.GmailApp.search = q => {
+    if (/^newer_than:365d subject:"Mensaje desde tusclases/i.test(q)) {
+      return [mockReceipt('uno', '2466634'), mockReceipt('dos', '2466635')];
+    }
+    if (/^in:sent/.test(q)) return [];
+    return [];
+  };
+  const before = JSON.stringify(env.sheets.Contactados.rows);
+  const report = env.ctx.orqDiagnosticoContactosSoloLectura();
+  assert.equal(report.modo, 'SOLO_LECTURA');
+  assert.equal(report.contactosCRM, 1);
+  assert.equal(report.contactosCRMConIdentificador, 1);
+  assert.equal(report.confirmacionesGmail, 2);
+  assert.equal(report.anunciosUnicosConfirmaciones, 2);
+  assert.equal(report.anunciosConfirmadosNoRegistradosEnCRM, 1);
+  assert.equal(report.mensajeriaInternaVerificada, false);
+  assert.equal(report.fuentesConsultadas.gmailEnviados, true);
+  assert.equal(report.revisionIncompleta, false);
+  assert.equal(JSON.stringify(env.sheets.Contactados.rows), before);
+  assert.deepEqual(Object.keys(env.props).sort(), ['GEMINI_API_KEY','SHEET_ID','YOUTUBE_API_KEY'].sort());
+  assert.doesNotMatch(JSON.stringify(report), /Nombre privado|2466634|2466635|gmail\.com/i);
+});
+
+test('diagnóstico de contactos: fallo de Gmail exige etiqueta incompleta y conserva datos de CRM', () => {
+  const env = createMockEnv();
+  const ss = env.ctx.SpreadsheetApp.openById(STAGING);
+  const sh = ss.insertSheet('Contactados');
+  sh.rows.push(['Nombre', 'Materia', 'URL', 'Fecha', 'Nota']);
+  sh.rows.push(['Contacto privado', 'Química',
+    'https://www.tusclases.com.ar/estudiante-quimica/aviso-2466634.aspx', '', '']);
+  env.ctx.GmailApp.search = () => { throw new Error('Permiso vencido'); };
+  const report = env.ctx.orqDiagnosticoContactosSoloLectura();
+  assert.equal(report.revisionIncompleta, true);
+  assert.equal(report.contactosCRM, 1);
+  assert.equal(report.anunciosUnicosCRM, 1);
+  assert.equal(report.fuentesConsultadas.gmailRecibidos, false);
+  assert.equal(report.fuentesConsultadas.gmailEnviados, false);
+});
+
+
+test('búsqueda Tusclases: una fuente de Química no excluye una alerta con alumno de Matemática', () => {
+  const env = createMockEnv();
+  addGmailFixture_(env, 'GM-MATERIAS');
+  const row = env.sheets.Fuentes.rows.find(r => r[0] === 'GM-MATERIAS');
+  row[3] = 'Química; Física; Matemática; Biología';
+  let query = '';
+  const search = env.ctx.GmailApp.search;
+  env.ctx.GmailApp.search = q => {
+    if (/^newer_than:7d/.test(q)) query = q;
+    return search(q);
+  };
+  env.ctx.orqStart(['GM-MATERIAS'], 10);
+  assert.match(query, /from:\(tusclases\.com\.ar/);
+  assert.match(query, /-subject:"Mensaje desde tusclases\.com\.ar"/);
+  assert.doesNotMatch(query, /\bQuímica\b|\bFísica\b|\bMatemática\b|\bBiología\b/,
+    'los filtros por materia producen falsos negativos en boletines mixtos');
+  assert.equal(env.ctx.orqStatus().estado, 'FINALIZADO');
+  assert.ok(env.sheets.OrqHallazgos.rows.slice(1).some(r => r[2] === 'Gmail'));
+});
+
+test('control previo: identifica anuncios de Tusclases en enlaces directos y tracking codificado sin navegar', () => {
+  const env = createMockEnv();
+  const url = 'https://www.tusclases.com.ar/estudiante-matematica/pedido-2466634.aspx?utm_source=mail';
+  const ses = 'https://abc.awstrack.me/L0/' + encodeURIComponent(url) + '/42/hash';
+  assert.deepEqual(Array.from(env.ctx.orqTusclasesIds_(url)), ['2466634']);
+  assert.deepEqual(Array.from(env.ctx.orqTusclasesIds_(ses)), ['2466634']);
+  assert.deepEqual(Array.from(env.ctx.orqTusclasesIds_('https://www.tusclases.com.ar/inbox')), []);
+  assert.deepEqual(Array.from(env.ctx.orqTusclasesIds_('https://www.superprof.com.ar/profesor/perfil')), []);
+});
+
+test('control previo: Contactados bloquea alumno confirmado antes de gastar una llamada Gemini', () => {
+  const env = createMockEnv();
+  addGmailFixture_(env, 'GM-CONTACTADO');
+  const ss = env.ctx.SpreadsheetApp.openById(STAGING);
+  const contacts = ss.insertSheet('Contactados');
+  contacts.rows.push(['Nombre', 'Materia', 'URL', 'Fecha', 'Nota']);
+  contacts.rows.push(['Alumno de prueba', 'Matemática',
+    'https://www.tusclases.com.ar/estudiante-matematica/pedido-2466634.aspx?utm_source=alerta',
+    '2026-10-28', 'Confirmación simulada']);
+
+  env.ctx.orqStart(['GM-CONTACTADO'], 10);
+  const report = env.ctx.orqStatus();
+  assert.equal(report.estado, 'FINALIZADO');
+  assert.equal(report.metricas.candidatos, 0);
+  assert.equal(report.metricas.repetidos, 1);
+  assert.equal(env.sheets.OrqHallazgos.rows.length, 1, 'contacto previo no reaparece como solicitud nueva');
+  assert.equal(env.stats.gem, 0, 'no consume Gemini en contacto previamente confirmado');
+  const index = env.ctx.orqContactHistory_(ss);
+  assert.equal(index.crmChecked, true);
+  assert.equal(index.crmRows, 1);
+  assert.equal(index.known['2466634'], true);
+  assert.doesNotMatch(JSON.stringify(report), /Alumno de prueba|Confirmación simulada/);
+});
+
+test('control previo: comprobante recibido de Tusclases bloquea contacto aunque no figure en Contactados', () => {
+  const env = createMockEnv();
+  addGmailFixture_(env, 'GM-RECIBO');
+  const actualSearch = env.ctx.GmailApp.search;
+  const url = 'https://www.tusclases.com.ar/estudiante-matematica/pedido-2466634.aspx';
+  const ses = 'https://abc.awstrack.me/L0/' + encodeURIComponent(url) + '/44/hash';
+  env.ctx.GmailApp.search = q => {
+    if (/^newer_than:365d subject:"Mensaje desde tusclases/i.test(q)) {
+      return [{
+        getId: () => 'receipt-thread',
+        getMessages: () => [{
+          getSubject: () => 'Mensaje desde tusclases.com.ar: profesor contactado',
+          getPlainBody: () => 'Tu mensaje se ha enviado correctamente.\n' + ses
+        }]
+      }];
+    }
+    if (/^in:sent/.test(q)) return [];
+    return actualSearch(q);
+  };
+  env.ctx.orqStart(['GM-RECIBO'], 10);
+  assert.equal(env.ctx.orqStatus().metricas.candidatos, 0);
+  assert.equal(env.ctx.orqStatus().metricas.repetidos, 1);
+  assert.equal(env.stats.gem, 0);
+});
+
+test('control previo: solicitud sin contacto confirmado queda VISIBLE como pendiente, nunca como lista para enviar', () => {
+  const env = createMockEnv();
+  addGmailFixture_(env, 'GM-PENDIENTE');
+  const ss = env.ctx.SpreadsheetApp.openById(STAGING);
+  const contacts = ss.insertSheet('Contactados');
+  contacts.rows.push(['Nombre', 'Materia', 'URL', 'Fecha', 'Nota']);
+  contacts.rows.push(['Otro alumno', 'Química',
+    'https://www.tusclases.com.ar/estudiante-quimica/solicitud-2466635.aspx',
+    '2026-10-28', '']);
+  env.ctx.orqStart(['GM-PENDIENTE'], 10);
+  const status = env.ctx.orqStatus();
+  const relevant = env.sheets.OrqHallazgos.rows.slice(1).filter(row => row[2] === 'Gmail');
+  assert.equal(status.metricas.candidatos, 1);
+  assert.equal(relevant.length, 1);
+  assert.equal(relevant[0][11], 'VERIFICAR_CONTACTO');
+  assert.equal(status.candidatos.length, 1, 'se puede revisar sin contacto automático');
+  assert.equal(status.candidatos[0].estadoContacto, 'PENDIENTE_VERIFICAR_EN_PLATAFORMA');
+});
+
+test('control previo: si Gmail no permite verificar recibidos o enviados, no se afirma contacto libre', () => {
+  const env = createMockEnv();
+  addGmailFixture_(env, 'GM-ERROR-AUDITORIA');
+  const actual = env.ctx.GmailApp.search;
+  env.ctx.GmailApp.search = q => {
+    if (/^newer_than:365d subject:|^in:sent/.test(q)) throw new Error('No autorizado');
+    return actual(q);
+  };
+  env.ctx.orqStart(['GM-ERROR-AUDITORIA'], 10);
+  const rows = env.sheets.OrqHallazgos.rows.slice(1);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0][11], 'VERIFICAR_CONTACTO');
+  assert.match(String(rows[0][15]), /VERIFICACION_INCOMPLETA/);
+  assert.equal(env.ctx.orqStatus().candidatos[0].estadoContacto, 'PENDIENTE_VERIFICAR_EN_PLATAFORMA');
+});
+
+test('regresión Gmail: rehidrata descriptor con ID en lugar de llamar getMessages sobre JSON', () => {
+  const env = createMockEnv();
+  addGmailFixture_(env, 'GM-SERIAL');
+  const realSearch = env.ctx.GmailApp.search;
+  const realThread = realSearch()[0];
+  const expectedId = realThread.getId();
+  env.ctx.GmailApp.search = () => [{ id: expectedId }];
+  env.ctx.GmailApp.getThreadById = id => id === expectedId ? realThread : null;
+
+  env.ctx.orqStart(['GM-SERIAL'], 10);
+  const rows = env.sheets.OrqFuentes.rows.slice(1);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0][5], 'OK');
+  assert.ok(env.sheets.OrqHallazgos.rows.slice(1).some(row => row[2] === 'Gmail'));
+  assert.equal(env.ctx.orqStatus().estado, 'FINALIZADO');
+});
+
+test('regresión Gmail: falla de forma explícita y sin filtrar IDs cuando la búsqueda entrega objetos inválidos', () => {
+  const env = createMockEnv();
+  addGmailFixture_(env, 'GM-INVALID');
+  env.ctx.GmailApp.search = () => [{ payload: 'descriptor-no-compatible' }];
+
+  env.ctx.orqStart(['GM-INVALID'], 10);
+  const rows = env.sheets.OrqFuentes.rows.slice(1);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0][5], 'ERROR_GMAIL');
+  assert.match(String(rows[0][15]), /GmailThread válido/);
+  assert.ok(!String(rows[0][15]).includes('descriptor-no-compatible'));
+  assert.equal(env.sheets.OrqHallazgos.rows.length, 1);
+});
+
+test('regresión Gmail: no acepta respuestas de búsqueda no iterables', () => {
+  const env = createMockEnv();
+  addGmailFixture_(env, 'GM-NONARRAY');
+  env.ctx.GmailApp.search = () => ({ metadata: 'not-an-array' });
+
+  env.ctx.orqStart(['GM-NONARRAY'], 10);
+  const rows = env.sheets.OrqFuentes.rows.slice(1);
+  assert.equal(rows[0][5], 'ERROR_GMAIL');
+  assert.match(String(rows[0][15]), /lista de conversaciones/);
+});
+
 test('regresión: cuota vencida no dispara reintentos infinitos ni progreso ficticio', () => {
   const env = createMockEnv();
   env.ctx.orqStart(['YT-01', 'YT-02'], 10);
@@ -653,7 +1016,7 @@ test('regresión F-01: Gmail clasificado Media por reglas se conserva para revis
   const st = env.ctx.orqStatus();
   assert.equal(st.metricas.candidatos, 1);
   const rows = env.sheets.OrqHallazgos.rows.slice(1);
-  assert.ok(rows.some(r => r[11] === 'REVISAR' && r[2] === 'Gmail'));
+  assert.ok(rows.some(r => r[11] === 'VERIFICAR_CONTACTO' && r[2] === 'Gmail'), 'solicitud apta pero aún pendiente de comprobar mensajería interna');
 });
 
 test('control RPM: espacia las solicitudes Gemini sucesivas sin modificar el cupo diario', () => {
@@ -1249,6 +1612,39 @@ test('recuperación 3: cuota diaria real RPD programada tras reinicio del Pacíf
   assert.equal(st77.metricas.candidatos, 3);
   assert.equal(st77.metricas.errores, 0, 'las 25 filas históricas PAUSADO_CUOTA con errores=1 no inflan metricas.errores');
   assert.equal(st77.metricas.detalles.length, 3, 'las filas históricas PAUSADO_CUOTA vacías no contaminan detalles');
+  // La columna «Fuentes completas» del resumen es la cola, no los últimos
+  // estados de OrqFuentes. Una fila histórica OK puede no corresponder al
+  // estado final del trabajo.
+  const shCorridas77 = ss77.insertSheet('OrqCorridas');
+  shCorridas77.rows.push(['Run ID', 'Inicio', 'Fin', 'Estado', 'Fuentes totales', 'Fuentes completas',
+    'Comentarios/Avisos leidos', 'Repetidos', 'Clasificados', 'Solicitudes', 'Candidatos',
+    'Errores', 'Llamadas YouTube', 'Llamadas Gemini', 'Duración segundos']);
+  shCorridas77.rows.push([runId77, new Date('2026-04-17T23:50:47Z'), '', 'PAUSADO_CUOTA', 77,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+  // Simular un historial que dice OK para SRC-5 pese a que sigue PENDIENTE en cola.
+  env77.sheets.OrqFuentes.rows.push([
+    runId77, new Date(), 'SRC-5', 'Canal 5', 'youtube_canales', 'OK',
+    3, 0, 3, 0, 0, 0, 1, 1, 1.0, ''
+  ]);
+  env77.ctx.orqUpdateRunRow_(ss77, JSON.parse(env77.props.ORQ_RUN));
+  assert.equal(env77.sheets.OrqCorridas.rows[1][5], 3,
+    'fuentes completas deben coincidir con 3 trabajos COMPLETADO de OrqCola, no 4 filas OK históricas');
+  // Una versión antigua dejó un trabajo en cola COMPLETADO, pero su resultado
+  // final fue ERROR_GMAIL. Debe quedar excluido del total verificado.
+  env77.sheets.OrqCola.rows.find(row => row[2] === 'SRC-6')[5] = 'COMPLETADO';
+  env77.sheets.OrqFuentes.rows.push([
+    runId77, new Date(), 'SRC-6', 'Gmail roto', 'gmail_alertas', 'ERROR_GMAIL',
+    0, 0, 0, 0, 0, 1, 0, 0, 1.0, 'thread inválido'
+  ]);
+  const reconciled = env77.ctx.orqTotals_(ss77, runId77);
+  assert.equal(reconciled.completados, 4, 'la cola cruda conserva 4 estados COMPLETADO');
+  assert.equal(reconciled.completadosVerificados, 3, 'se excluye el falso completado');
+  assert.equal(reconciled.discrepanciasEstado, 1);
+  env77.ctx.orqUpdateRunRow_(ss77, JSON.parse(env77.props.ORQ_RUN));
+  assert.equal(env77.sheets.OrqCorridas.rows[1][5], 3,
+    'el resumen exige que cola y último registro coincidan');
+
+
 });
 
 test('regresión seguridad: nueva corrida no puede sobrescribir ORQ_RUN pausada o recuperable', () => {

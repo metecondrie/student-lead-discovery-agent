@@ -2,6 +2,22 @@
 
 **Corte verificable de esta fotografía: 2026-11-01.** Este documento es un resumen para retomar el proyecto, **no** una verificación automática permanente. Actualizarlo tras cada cambio importante.
 
+## Novedad técnica posterior — 2026-11-01
+
+- **Diagnóstico de fuentes:** [auditoría e inventario de 77 fuentes](AUDITORIA_FUENTES_2026-11-01.md); 0 candidatos y fallos concretos en Gmail, resolución de canales y métricas.
+- **Trabajo en curso:** [pull request borrador #12](https://github.com/metecondrie/student-lead-discovery-agent/pull/12), rama `fix/gmail-diagnostico-y-piloto-20261101` contra `fix/orquestador-cuota-gmail-progreso-20261101`. Implementa validación/rehidratación defensiva de GmailThread, tres tests y CI para ramas `fix/**`.
+- **CI:** GitHub Actions pasó para el HEAD `d4de518a185d18f822d27070d7b3dd36f65a7369` (push y PR), pero **no certifica el error real en Apps Script**.
+- **Piloto comercial propuesto:** [cuatro fuentes automáticas y vías de captación manual](https://github.com/metecondrie/student-lead-discovery-agent/blob/fix/gmail-diagnostico-y-piloto-20261101/docs/PILOTO_COMERCIAL_2026-11-01.md). No se modificaron fuentes ni triggers de STAGING y **no se desplegó el PR**.
+- **Siguiente paso imprescindible:** identificar la versión real del despliegue, examinar la corrida sin sobrescribirla y reproducir `th.getMessages is not a function`; verificar que la corrección resuelva la causa antes de fusionar o desplegar.
+
+## Actualización técnica — causas raíz y herramientas de diagnóstico (2026-11-01)
+
+- **Causas históricas verificadas en código:** `feature/orquestador-multifuente` persistía objetos `GmailThread` en `run._gmailCache` (pierden `getMessages()` tras JSON) y etiquetaba `COMPLETADO` incondicionalmente al volver de conectores que registraban errores. **No está verificado que esa rama fuera la versión ejecutada en STAGING**.
+- **Diagnóstico agregado seguro:** `orqDiagnosticoSoloLectura()` en el PR; muestra discrepancias entre cola, resultados, resumen, `ORQ_RUN` y recuento de triggers, sin ejecutar conectores ni mostrar datos de estudiantes.
+- **Auditoría offline:** `tools/auditar-deploy-local.cjs` compara patrones y hashes SHA-256 del archivo Apps Script clonado o de la respuesta privada de `projects.getContent(versionNumber=N)`, con tests. Ver [guía de verificación](VERIFICAR_DESPLIEGUE_APPS_SCRIPT_2026-11-01.md).
+- **Deduplicación real:** Gmail usa ID canónico del anuncio Tusclases y un índice local para no procesar dos correos con diferentes enlaces de seguimiento como dos leads; pruebas con mismo aviso, distinto aviso y enlace genérico.
+- **CI de PR:** pruebas de regresión automáticas aprobadas en commit `f25c1501907c05a9be11c108adf3b3158f0cd7d6` (posteriores a las pruebas de métricas, Gmail y diagnóstico). CI no equivale a desplegado.
+
 ## 1. Dónde está cada cosa
 - **GitHub:** repositorio `metecondrie/student-lead-discovery-agent`, **público** al momento de la verificación. El README anterior de `main` decía «privado»; esa frase era incorrecta.
 - **`main`:** solo documentación y configuración de ejemplo, **no** el código operativo del orquestador.
@@ -50,3 +66,32 @@
 
 ## 6. Límites de la transferencia entre IAs
 GitHub conserva código y decisiones **documentadas**, no el historial completo de ChatGPT, Gmail, mensajes internos ni estado actual de Google Sheets/Apps Script. Una IA sin conectores autorizados debe pedir acceso o un resumen redactado: no debe inventar datos ni repetir contactos.
+
+## Cierre de etapa 3 — pruebas y próximos pasos (2026-11-01)
+
+- PR borrador [#12](https://github.com/metecondrie/student-lead-discovery-agent/pull/12): código y tests actualizados; CI pasó para el commit de código `51152cdb05f838b504f1823a421dd230307eb270`.
+- **Causas raíz históricas halladas** en `feature/orquestador-multifuente`: (a) objetos `GmailThread` en `run._gmailCache` serializado; (b) transición incondicional a `COMPLETADO` tras retorno de un conector, incluso si reportaba `ERROR_GMAIL` o `ERROR_RESOLUCION`.
+- Se agregaron `orqDiagnosticoSoloLectura()`, herramienta local para comparar versiones (sin red), tests de no modificación, deduplicación de avisos por ID de Tusclases y prueba para **no fusionar dos mensajes distintos de Superprof por tener la misma URL de perfil**.
+- CI ahora impide volver a introducir ambos patrones antiguos (`tests/deployment-regression-guard.test.js`).
+- **Sin despliegue en Apps Script ni modificaciones en Sheets:** no se pudieron consultar los contenidos de HEAD ni la versión inmutable desplegada con las conexiones disponibles. Seguir [guía de comparación](VERIFICAR_DESPLIEGUE_APPS_SCRIPT_2026-11-01.md), con acceso autorizado a la API Apps Script y sin divulgar el código/versiones privados.
+- Próximo paso seguro: obtener solo lectura de HEAD y la versión activa, comparar hashes y patrones, y recién después evaluar integración/despliegue del PR. No iniciar una nueva corrida ni contactar alumnos automáticamente.
+
+## Etapa 4 — protección contra mensajes duplicados (2026-11-01)
+
+- **Auditoría privada agregada:** 10 contactos en `Contactados`, 11 comprobantes de Tusclases en Gmail (uno nuevo del 2026-11-01 no reflejado en la planilla; una confirmación sin ID legible). Ver [informe sin PII](AUDITORIA_CONTACTOS_2026-11-01.md).
+- **Código propuesto en PR #12:** índices efímeros de contactos de Gmail Recibidos/Enviados + pestaña `Contactados`; enlaces directos y `awstrack.me/L0/` decodificados sin visitar URLs; contactos confirmados excluidos **antes** de Gemini. Sin coincidencia: `VERIFICAR_CONTACTO`, **no «libre para escribir»**.
+- **Panel mejorado:** botón «Comprobar contactos», solo lectura, con totales agregados; mostrar el estado pendiente de cada candidato y mensajería interna no verificada.
+- **Piloto operativo preparado:** interfaz sin modo `ALL_ENABLED` por defecto; selección explícita de las cuatro fuentes con `orqPreviewPilotoComercial()` y confirmación antes de iniciar. No se inició ninguna corrida.
+- **Pruebas:** casos sintéticos cubren CRM, comprobantes, seguimiento codificado, errores de Gmail, no duplicación, privacidad y modo piloto seguro. Verificar CI del último commit de la rama.
+- **Bloqueante:** estas funcionalidades no están instaladas en STAGING. Primero comprobar HEAD, deployment y triggers con acceso autorizado a Apps Script; [guía](VERIFICAR_DESPLIEGUE_APPS_SCRIPT_2026-11-01.md).
+
+
+## Etapa 5 — consulta Gmail corregida y verificador de despliegue (2026-11-01)
+
+- **Verificación de Gmail (agregados, sin datos personales):** la búsqueda general de Tusclases durante los 7 días recientes devolvió 17 hilos, pero excluyendo por asunto «Mensaje desde tusclases.com.ar» se redujo a 6; entre los 6 había 3 alertas de alumnos. El filtro adicional «Química» perdía esas 3 alertas.
+- **Cambio probado en GitHub:** la consulta de Tusclases **ya no añade un filtro por materia**, porque los boletines contienen estudiantes de varias materias; excluye explícitamente los comprobantes de envío saliente para no ocupar el cupo de 15 hilos por fuente. La clasificación por materia se hace después. Se agregó prueba de regresión.
+- **Nuevo verificador local:** `tools/verificar-staging-solo-lectura.ps1` en [rama PR #12](https://github.com/metecondrie/student-lead-discovery-agent/pull/12). Clona HEAD y opcionalmente versión inmutable a carpetas temporales privadas y los compara mediante el analizador offline; no ejecuta `push`, `deploy` o triggers. Ver [instrucciones](VERIFICAR_DESPLIEGUE_APPS_SCRIPT_2026-11-01.md).
+- La batería de CI pasó en el commit de código/pruebas `d40fbf996b60aa0075f08d7e6b7cfff069421e0f` (**159 tests**). Las validaciones son simuladas; no equivalen a desplegar ni verificar Apps Script real.
+- **Bloqueante único de integración:** ejecutar el verificador desde una computadora conectada a la cuenta de Google de STAGING con `clasp` autenticado; confirmar el `versionNumber` que corresponde al web app antes de ejecutarlo. Luego inspeccionar estado real de triggers/cola antes de habilitar piloto.
+- No se hicieron cambios en la planilla STAGING, Script Properties, despliegues ni mensajes a terceros.
+
