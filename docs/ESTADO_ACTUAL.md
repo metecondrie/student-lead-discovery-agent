@@ -1,0 +1,45 @@
+# ESTADO_ACTUAL — punto de recuperación entre IAs
+
+**Corte verificable de esta fotografía: 2026-11-01.** Este documento es un resumen para retomar el proyecto, **no** una verificación automática permanente. Actualizarlo tras cada cambio importante.
+
+## 1. Dónde está cada cosa
+- **GitHub:** repositorio `metecondrie/student-lead-discovery-agent`, **público** al momento de la verificación. El README anterior de `main` decía «privado»; esa frase era incorrecta.
+- **`main`:** solo documentación y configuración de ejemplo, **no** el código operativo del orquestador.
+- **Rama candidata para desarrollo:** `fix/orquestador-cuota-gmail-progreso-20261101`, SHA revisado `5d33e1510628a3ed0c2e2d87df38c6b30bcaa97f`. En la revisión estaba **12 commits por delante y 0 por detrás** de `feature/orquestador-multifuente`.
+- **Rama anterior:** `feature/orquestador-multifuente`. También existen ramas separadas de YouTube, briefing, auditorías y el orquestador de un clic. No mezclar versiones automáticamente.
+- **Código en rama candidata:** `gas/Core.js`, `gas/Main.js`, `gas/Orquestador.js`, `gas/Catalogo.js`, panel HTML, módulos YouTube, manifiesto de Apps Script, pruebas Node y GitHub Actions.
+- **Planilla operativa de captación:** Google Sheets con pestañas `Oportunidades`, `Contactados`, `Config`, `Ingresos`, `Consultas`, `Ejecuciones`, `Log` y `_vistos`. Identificarla mediante conexión autorizada, no publicar su ID ni exportaciones.
+- **STAGING:** existe una planilla separada, con `OrqCorridas`, `OrqFuentes`, `OrqHallazgos`, `OrqCola` y otras pestañas de prueba. Verificar la ruta y los IDs directamente mediante acceso autorizado antes de operar.
+
+## 2. Evidencia observada en sistemas (no extrapolar)
+- En la planilla operativa, `Config/SISTEMA_ACTIVO = FALSE` y `MODO_B_AUTOENVIO = FALSE` al 2026-11-01. Última ejecución del motor antiguo visible: 2026-10-30 (22 emails procesados, 9 ítems, 4 nuevos, 5 descartes, 0 respuestas en esa fila).
+- En la planilla STAGING, `Config/SISTEMA_ACTIVO = FALSE` en la lectura del 2026-11-01. Las dos primeras corridas registradas figuran `FINALIZADO`; otra corrida iniciada el 30/10 figura `EJECUTANDO`, con progreso parcial y errores. **Ese valor de celda no prueba que un trigger esté ejecutándose hoy**: comprobar estado real, edad del cursor y recuperación antes de reanudar o iniciar una nueva.
+- Hay reportes de un despliegue STAGING de web app actualizado a versión 2 durante 2026-11-01, pero **en esta auditoría no se comprobó el estado HTTP /exec, ni se cotejó el código desplegado con el HEAD de GitHub**. No dar por validado el entorno basándose en documentación histórica.
+- En `fix/...` se registran parches del 2026-11-01 para HTTP 429, cuotas RPM/TPM/RPD, cursores de lotes parciales, recuperación de `EN_PROCESO` obsoletos y protección contra sobrescribir corridas pausadas. La presencia de esos commits **no** demuestra que estén desplegados ni que su comportamiento sea correcto en producción.
+- El README de la rama declara 90 pruebas simuladas aprobadas. **No se volvió a ejecutar `npm test` en esta revisión**; hacerlas correr en la copia actual.
+
+## 3. Auditoría reciente de candidatos: evitar trabajo repetido
+- Revisión manual del 2026-11-01 de Gmail y `Contactados`: **10 comprobantes** de contactos realizados desde Tusclases el 2026-10-28. Se excluyen del primer contacto; los nombres y enlaces se consultan **solo en las fuentes privadas**.
+- Un único aviso de Matemática universitaria generó **3 alertas/filas** diferentes por URL de seguimiento. Normalizar usando el ID de aviso; son **1 oportunidad y 2 duplicados**, no tres alumnos.
+- Un mensaje administrativo de Superprof («tu aviso está en línea») fue clasificado erróneamente como posible alumno. Falso positivo.
+- La mensajería interna de Tusclases puede no reflejarse íntegramente en Gmail. Ausencia de correo = **contacto no confirmado**, no prueba de «nunca contactado».
+- No hubo nuevos envíos a potenciales alumnos durante esta auditoría.
+
+## 4. Arquitectura y cobertura: lo que sí/no significa
+- Catálogo con **239 fuentes candidatas**: no significa 239 conectores activos, accesibles ni validados.
+- Prototipos de Gmail/alertas, RSS de foros, YouTube y clasificación Gemini; revisar qué conector se usa efectivamente en **cada motor** (motor antiguo y orquestador). No confundir el catálogo con fuentes operativas.
+- Instagram, TikTok, Facebook, WhatsApp, Telegram y espacios cerrados **no** cuentan con un rastreo general de terceros oficialmente autorizado por el solo hecho de figurar en el catálogo.
+- No existe autorización para enviar mensajes de venta automáticamente.
+- Documentos `docs/ORQUESTADOR_1CLICK.md` y `docs/PLAN_CIERRE_MULTIFUENTE.md` pueden describir una versión histórica; **priorizar este estado fechado y comprobar sistemas vivos** si hay contradicción.
+
+## 5. Bloqueantes y próximas acciones, en orden
+1. Verificar los commits más recientes y comparar rama candidata con STAGING mediante `clasp pull`, hashes y un mecanismo **solo lectura**, antes de cualquier `clasp push`.
+2. Inspeccionar estado real de corrida/triggers en STAGING. Preservar cola y cursor; no duplicar ni sobrescribir corridas recuperables.
+3. Implementar y probar deduplicación por URL canónica/ID de anuncio y filtrado de avisos administrativos.
+4. Agregar comprobación de contacto previo con Gmail Enviados **más** confirmaciones recibidas y `Contactados`, con tres estados: confirmado, no verificado e incierto por mensajería interna.
+5. Ejecutar `npm test` en rama actual; repetir un ensayo acotado en copia/STAGING si el usuario lo autoriza, sin escribir a terceros.
+6. Auditoría de secretos y privacidad. **No fusionar a `main` ni activar el motor** hasta resolver pruebas/seguridad.
+7. Mantener canal comercial manual: buscar solicitudes reales online, preparar anuncios de intensivos y después desarrollar videos cortos y blog, según `docs/ESTRATEGIA_CAPTACION.md`.
+
+## 6. Límites de la transferencia entre IAs
+GitHub conserva código y decisiones **documentadas**, no el historial completo de ChatGPT, Gmail, mensajes internos ni estado actual de Google Sheets/Apps Script. Una IA sin conectores autorizados debe pedir acceso o un resumen redactado: no debe inventar datos ni repetir contactos.
