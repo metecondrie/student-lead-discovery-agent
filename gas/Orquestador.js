@@ -1576,15 +1576,12 @@ function orqHydrateGmailThread_(rawThread) {
  */
 function orqGmailStableId_(item, msgId) {
   var it = item || {};
-  if (it.id) return String(it.id);
   var raw = String(it.url || '');
-  // Compartir el mismo ID canónico con solicitudes introducidas manualmente.
+  // Usar solo identificadores presentes en la URL PÚBLICA del anuncio.
+  // Un enlace /inbox o /perfil puede corresponder a alumnos diferentes.
   var manualId = typeof orqManualAdId_ === 'function' ? orqManualAdId_(raw) : '';
   if (manualId) return 'GMAIL-TUSCLASES-' + manualId;
-  var canonical = typeof canonicalUrl === 'function' ? canonicalUrl(raw) : raw;
-  var tusMatch = canonical.match(/tusclases\.com(?:\.[a-z]{2,})?\/[^?#]*?(\d{5,})\.aspx(?:[?#]|$)/i) ||
-    canonical.match(/tusclases\.com(?:\.[a-z]{2,})?\/[^#]*?[?&]id=(\d{5,})(?:[&#]|$)/i);
-  if (tusMatch) return 'GMAIL-TUSCLASES-' + tusMatch[1];
+  if (it.id) return String(it.id);
 
   // Otras plataformas pueden enviar el mismo enlace a un perfil o bandeja
   // para alumnos DIFERENTES. Solo un ID de anuncio comprobable permite fusionar
@@ -1604,7 +1601,7 @@ function orqTusclasesIds_(input) {
   var s = String(input || '').replace(/&amp;/gi, '&');
   var result = {};
   for (var i = 0; i < 4; i++) {
-    var regex = /(?:tusclases\.(?:com\.ar|com|co|pe|mx)|tusclasesparticulares\.(?:cl|com))\/[^\s"'<>]{0,500}?(\d{5,})\.aspx(?:[?#/&]|$)/gi;
+    var regex = /(?:tusclases\.(?:com\.ar|com|co|pe|mx)|tusclasesparticulares\.(?:cl|com))\/[^\s"'<>]{0,500}?(\d{5,})(?:\.aspx)?(?:[?#/&]|$)/gi;
     var hit;
     while ((hit = regex.exec(s)) !== null) result[hit[1]] = true;
     var query = /(?:tusclases\.(?:com\.ar|com|co|pe|mx)|tusclasesparticulares\.(?:cl|com))\/[^\s"'<>]{0,500}?[?&]id=(\d{5,})(?:[&#\s]|$)/gi;
