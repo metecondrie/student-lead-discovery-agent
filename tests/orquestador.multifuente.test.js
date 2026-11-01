@@ -684,6 +684,56 @@ test('piloto: previsualización de cuatro fuentes es de solo lectura y detecta f
   assert.ok(!Array.from(after.fuentesListas).includes('CAT-0036'));
 });
 
+test('deduplicación Gmail: dos enlaces con tracking al mismo aviso de Tusclases comparten identidad', () => {
+  const env = createMockEnv();
+  const base = 'https://www.tusclases.com.ar/estudiante-matematica/solicito-profesor-2466634.aspx';
+  const first = env.ctx.orqGmailStableId_({source:'tusclases',url:base+'?utm_source=email1'}, 'email-1');
+  const second = env.ctx.orqGmailStableId_({source:'tusclases',url:base+'?utm_source=email2'}, 'email-2');
+  assert.equal(first, second);
+  assert.equal(first, 'GMAIL-TUSCLASES-2466634');
+  assert.notEqual(first, env.ctx.orqGmailStableId_({source:'tusclases',
+    url:'https://www.tusclases.com.ar/estudiante-matematica/otro-profesor-2466635.aspx'}, 'email-3'));
+
+  const dashboard = {source:'tusclases',url:'https://www.tusclases.com.ar/inbox',title:'Nueva consulta'};
+  assert.notEqual(env.ctx.orqGmailStableId_(dashboard, 'correo-A'),
+                  env.ctx.orqGmailStableId_(dashboard, 'correo-B'),
+                  'el mismo enlace genérico no autoriza fusionar dos estudiantes');
+});
+
+test('deduplicación Gmail: dos emails distintos del mismo aviso no gastan dos clasificaciones', () => {
+  const env = createMockEnv();
+  addGmailFixture_(env, 'GM-TRACK');
+  const base = 'https://www.tusclases.com.ar/estudiante-matematica/solicito-profesor-2466634.aspx';
+  const urls = {'email-1':base+'?utm_source=alerta1','email-2':base+'?utm_source=alerta2'};
+  const mk = id => ({
+    getId: () => 'thread-'+id,
+    getMessages: () => [{
+      getId: () => id,
+      getFrom: () => 'avisos@tusclases.com.ar',
+      getSubject: () => 'Aviso de Matemática universitaria',
+      getDate: () => new Date('2026-11-01T12:00:00Z'),
+      getPlainBody: () => 'Solicitud de clases online',
+      getBody: () => '<p>Solicitud</p>'
+    }]
+  });
+  env.ctx.GmailApp.search = () => [mk('email-1'),mk('email-2')];
+  env.ctx.extractFromEmail = email => ({items:[{
+    source:'tusclases',url:urls[email.id],title:'Matemática universitaria',
+    text:'Busco profesor particular online para preparar Matemática'
+  }]});
+  env.ctx.evaluate = () => ({compatible:'Alta',status:'Pendiente de revisión',score:90});
+
+  env.ctx.orqStart(['GM-TRACK'], 10);
+  assert.equal(env.ctx.orqStatus().estado, 'FINALIZADO');
+  const hits = env.sheets.OrqHallazgos.rows.slice(1);
+  assert.equal(hits.length, 1, 'solo un hallazgo persistido para el mismo anuncio');
+  assert.equal(hits[0][4], 'GMAIL-TUSCLASES-2466634');
+  assert.equal(env.sheets.OrqFuentes.rows[1][7], 1, 'un enlace duplicado contabilizado en repetidos');
+
+  env.ctx.orqStart(['GM-TRACK'], 10);
+  assert.equal(env.sheets.OrqHallazgos.rows.length, 2, 'otra corrida tampoco duplica el mismo anuncio');
+});
+
 test('regresión Gmail: rehidrata descriptor con ID en lugar de llamar getMessages sobre JSON', () => {
   const env = createMockEnv();
   addGmailFixture_(env, 'GM-SERIAL');
