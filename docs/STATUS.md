@@ -1,24 +1,27 @@
-# Estado de implementación y auditoría
+# STATUS — resumen ejecutivo del proyecto
 
-Fecha de referencia: 2026-10-30. No confundir pruebas simuladas con resultados de producción.
+**Última actualización documental: 2026-11-01.** Para la fotografía completa y trazable ver [ESTADO_ACTUAL.md](ESTADO_ACTUAL.md), que prevalece sobre documentos históricos.
 
-| Área | Estado |
+| Elemento | Estado confirmado o pendiente |
 | --- | --- |
-| Carpeta local y 80 pruebas Node | Verificado en una copia entregada por Antigravity |
-| Base maestra: 239 puntos de entrada | Catálogo preparado; accesibilidad variable |
-| Google Apps Script / Sheets / Gmail | Prototipo; no desplegado desde este repositorio |
-| Deduplicación de Tusclases | Pruebas de regresión; requiere piloto real |
-| YouTube | Conector y límites en prototipo; requiere verificar videos y permisos |
-| Gemini | **Bloqueado:** configuración local usa modelo 2.0 Flash-Lite, retirado en junio 2026 |
-| Integración de decisiones Gemini | Requiere verificar que afecten clasificación y alertas, no solo estado de cola |
-| Contactabilidad + precio internacional + perfiles docentes | Existe prototipo separado; pendiente de integración |
-| Datos reales, tokens y secretos | No deben publicarse |
-| Contacto automático | Deshabilitado y fuera del alcance inicial |
+| Repositorio | **Público**; revisar privacidad antes de compartir información |
+| `main` | Documentación; no código de orquestación actual |
+| Rama con código candidato | `fix/orquestador-cuota-gmail-progreso-20261101` |
+| Pruebas locales | El README de desarrollo informa 90 tests simulados; **pendiente repetir `npm test`** en HEAD vigente |
+| Apps Script | Entorno STAGING y hojas de orquestación existentes; `/exec` y correspondencia de código **no revalidados** aquí |
+| Hojas operativas/STAGING | `SISTEMA_ACTIVO=FALSE` en ambas configuraciones leídas el 2026-11-01 |
+| Corrida de STAGING | Registro histórico `EJECUTANDO`: **estado real/trigger incierto**; preservar hasta verificación |
+| Captación Gmail/Tusclases | 10 contactos anteriores confirmados; no volver a recomendar como primer contacto |
+| Calidad de oportunidades | 3 alertas = 1 anuncio (tracking); aviso de alta Superprof = falso positivo |
+| YouTube/RSS/Gemini | Código/prototipos en ramas; permisos, cuotas y casos reales pendientes de revalidación |
+| Instagram/TikTok/Facebook | Estrategia de contenido, **no** rastreo general automatizado de terceros |
+| Contacto automático | **No autorizado** |
 
-## Criterios de salida
-- API Gemini vigente y límites del plan comprobados.
-- Resultados de Gemini conectados al filtrado de oportunidades con pruebas end-to-end.
-- Una sola versión integrada de los cambios, sin regresiones.
-- Casos reales de duplicación, falsos positivos y notificaciones aprobados.
-- Sistema apagado por defecto; habilitación explícita y reversible.
-- Revisión final de privacidad, licencias y secretos antes de convertirlo en público.
+## Próximas acciones
+1. Verificar HEAD, diferencias con STAGING, cuota/API, trigger y cola pausada/obsoleta sin modificar datos.
+2. Corregir y probar deduplicación por ID de anuncio, falso positivo Superprof y cruce previo Gmail/Contactados.
+3. Correr tests y auditoría de seguridad; probar en copia y pedir aprobación antes de despliegues.
+4. Reanudar captación **manual** de alumnos nuevos verificados y medir reservas.
+5. Recién después considerar fusionar a `main`.
+
+Documentos de entrada: [AGENTS.md](../AGENTS.md), [estrategia](ESTRATEGIA_CAPTACION.md), [hoja de ruta](ROADMAP.md).
