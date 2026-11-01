@@ -366,7 +366,7 @@
       </div>
       <div class="metric-card">
         <div id="valCandidatos" class="metric-num" style="color:var(--green);">0</div>
-        <div class="metric-label">Candidatos para revisión</div>
+        <div class="metric-label">Solicitudes por revisar / verificar</div>
       </div>
       <div class="metric-card">
         <div id="valErrores" class="metric-num" style="color:var(--red);">0</div>
@@ -382,7 +382,7 @@
   <!-- 3. Candidatos Detectados para Revisión Humana -->
   <section class="card">
     <h2>3. Solicitudes de alumnos detectadas (revisión humana obligatoria)</h2>
-    <p class="desc">Mensajes reales clasificados con intención de clases, pedido abierto y vía de contacto permitida. Ningún mensaje se envía automáticamente.</p>
+    <p class="desc">Solicitudes para revisión humana. Si figura PENDIENTE, antes de escribir verificá los mensajes internos de la plataforma. El sistema no envía mensajes automáticamente.</p>
 
     <div class="table-container">
       <table>
@@ -393,11 +393,12 @@
             <th>Materia / Nivel</th>
             <th>Consulta / Comentario</th>
             <th>Confianza</th>
+            <th>Contacto previo</th>
             <th>Enlace original</th>
           </tr>
         </thead>
         <tbody id="candidatesTableBody">
-          <tr><td colspan="6" style="text-align:center; color:var(--muted); padding:20px;">Todavía no se encontraron candidatos calificados en esta corrida.</td></tr>
+          <tr><td colspan="7" style="text-align:center; color:var(--muted); padding:20px;">Todavía no se encontraron candidatos calificados en esta corrida.</td></tr>
         </tbody>
       </table>
     </div>
@@ -530,7 +531,7 @@
     const candidates = data.candidatos || [];
     if (!candidates.length) {
       $('candidatesTableBody').innerHTML =
-        '<tr><td colspan="6" style="text-align:center; color:var(--muted); padding:20px;">' +
+        '<tr><td colspan="7" style="text-align:center; color:var(--muted); padding:20px;">' +
         (running ? 'Buscando candidatos calificados en comentarios recientes…' : 'No se encontraron solicitudes abiertas aptas para revisión en esta corrida.') +
         '</td></tr>';
     } else {
@@ -543,6 +544,7 @@
           '<td>' + esc(c.materia) + (c.nivel ? ' · ' + esc(c.nivel) : '') + '</td>' +
           '<td>' + esc(c.texto) + '</td>' +
           '<td>' + (c.confianza ? Math.round(Number(c.confianza) * 100) + '%' : '—') + '</td>' +
+          '<td><b style="color:var(--red);">' + (c.estadoContacto === 'PENDIENTE_VERIFICAR_EN_PLATAFORMA' ? 'PENDIENTE' : 'SIN AUDITORÍA') + '</b></td>' +
           '<td>' + (urlValid ? '<a class="action-link" href="' + esc(c.url) + '" target="_blank" rel="noopener noreferrer">Ver original ↗</a>' : '—') + '</td>' +
           '</tr>';
       }).join('');
