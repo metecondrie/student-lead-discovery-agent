@@ -4,6 +4,20 @@
 
 **Importante:** la conexión de ChatGPT a Google Drive/Sheets permite leer datos y estados, **no expone aquí la API de Apps Script para obtener código de proyectos y versiones**. No se pudo leer el código real del despliegue desde esta sesión. El endpoint `/exec` tampoco fue accesible por lectura pública. No afirmar que la rama GitHub está desplegada.
 
+## Alternativa automatizada para Windows (PowerShell)
+
+Se agregó una herramienta de **solo lectura** en el [PR #12](https://github.com/metecondrie/student-lead-discovery-agent/blob/fix/gmail-diagnostico-y-piloto-20261101/tools/verificar-staging-solo-lectura.ps1), `tools/verificar-staging-solo-lectura.ps1`, para que otra IA con acceso local ejecute la comparación sin tener que escribir comandos sueltos. Requiere que `clasp` esté instalado y autenticado con la cuenta propietaria; **no instala paquetes, no ejecuta push, deploy, triggers ni funciones Apps Script**.
+
+Desde la raíz de la rama de desarrollo:
+
+```powershell
+.\tools\verificar-staging-solo-lectura.ps1 -ScriptId '<SCRIPT_ID_PRIVADO>' -VersionNumber 2
+```
+
+El `2` es **solo un ejemplo histórico**. Antes de ejecutarlo, confirmar el `versionNumber` real en **Apps Script → Implementar → Administrar implementaciones**. La herramienta clona HEAD y esa versión a carpetas temporales distintas, calcula hashes y patrones, no imprime IDs ni fuentes, y borra los archivos temporales al terminar. Sin `-VersionNumber`, solo verifica HEAD y avisa que falta la versión publicada. **No confirma que el código funcione; es una comparación estática.**
+
+El ID de proyecto privado debe permanecer en la computadora del usuario. No insertarlo en GitHub ni usar el ID del despliegue web en lugar del ID del proyecto.
+
 ## 1. Causas raíz halladas en el historial de GitHub
 
 En `feature/orquestador-multifuente` se observó este patrón defectuoso:
