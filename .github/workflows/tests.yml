@@ -1,9 +1,9 @@
 name: Node.js regression tests
 on:
   push:
-    branches: [main, 'develop/**', 'feature/**']
+    branches: [main, 'develop/**', 'feature/**', 'fix/**']
   pull_request:
-    branches: [main, 'develop/**', 'feature/**']
+    branches: [main, 'develop/**', 'feature/**', 'fix/**']
   workflow_dispatch:
 jobs:
   test:
