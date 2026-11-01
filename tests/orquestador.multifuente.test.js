@@ -843,7 +843,7 @@ test('regresión F-01: Gmail clasificado Media por reglas se conserva para revis
   const st = env.ctx.orqStatus();
   assert.equal(st.metricas.candidatos, 1);
   const rows = env.sheets.OrqHallazgos.rows.slice(1);
-  assert.ok(rows.some(r => r[11] === 'REVISAR' && r[2] === 'Gmail'));
+  assert.ok(rows.some(r => r[11] === 'VERIFICAR_CONTACTO' && r[2] === 'Gmail'), 'solicitud apta pero aún pendiente de comprobar mensajería interna');
 });
 
 test('control RPM: espacia las solicitudes Gemini sucesivas sin modificar el cupo diario', () => {
