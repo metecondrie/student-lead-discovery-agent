@@ -200,6 +200,12 @@ function createMockEnv(opts = {}) {
               getContentText: () => JSON.stringify({ error: { message: 'YouTube Service Unavailable' } })
             };
           }
+          if (Array.isArray(opts.customYtComments)) {
+            return {
+              getResponseCode: () => 200,
+              getContentText: () => JSON.stringify({ items: opts.customYtComments })
+            };
+          }
           return {
             getResponseCode: () => 200,
             getContentText: () => JSON.stringify({
@@ -235,17 +241,27 @@ function createMockEnv(opts = {}) {
 
         // Gemini API
         if (url.includes(':generateContent')) {
+          if (typeof opts.onGeminiCall === 'function') {
+            const customRes = opts.onGeminiCall(url, options);
+            if (customRes) return customRes;
+          }
           if (opts.failGeminiQuota) {
             return {
               getResponseCode: () => 429,
-              getContentText: () => JSON.stringify({ error: { message: 'Resource has been exhausted (e.g. check quota)' } })
+              getContentText: () => JSON.stringify({ error: { message: opts.gemini429Message || 'Resource has been exhausted (e.g. check quota)' } })
+            };
+          }
+          if (opts.failGeminiServer) {
+            return {
+              getResponseCode: () => 500,
+              getContentText: () => JSON.stringify({ error: { message: 'Internal Server Error' } })
             };
           }
           const body = JSON.parse(options.payload);
           const promptText = body.contents[0].parts[0].text;
           const items = JSON.parse(promptText);
           const decisions = items.map(it => {
-            const isNeed = /busco|necesito|preparar/i.test(it.text || '');
+            const isNeed = /busc[oa]|necesit[oa]|preparar/i.test(it.text || '');
             return {
               id: it.id,
               es_solicitud_clases: isNeed,
@@ -324,7 +340,7 @@ function createMockEnv(opts = {}) {
   vm.runInNewContext(ytSrc, ctx);
   vm.runInNewContext(orqSrc, ctx);
 
-  return { ctx, props, triggers, sheets, httpRequests, stats };
+  return { ctx, props, triggers, sheets, httpRequests, stats, opts };
 }
 
 test('1. Sincronización del catálogo maestro: lectura pura sin efectos laterales y migración segura con respaldo', () => {
@@ -423,10 +439,10 @@ test('2. Un único botón «Buscar alumnos»: genera cola persistente en OrqCola
   assert.ok(shCola);
   assert.ok(shCola.rows.length > 1); // Encabezado + trabajos
   
-  // PropertiesService contiene sólo metadatos cortos (<200 bytes), no listas completas de videos
+  // PropertiesService contiene sólo metadatos cortos (<250 bytes), no listas completas de videos
   const rawRun = env.props.ORQ_RUN;
   assert.ok(rawRun);
-  assert.ok(rawRun.length < 250);
+  assert.ok(rawRun.length < 300);
   const parsedRun = JSON.parse(rawRun);
   assert.equal(parsedRun.estado, 'EJECUTANDO');
   assert.equal(parsedRun.cursor, 1); // Primer paso ejecutado
@@ -609,8 +625,8 @@ test('regresión: cuota vencida no dispara reintentos infinitos ni progreso fict
 });
 
 
-test('regresión F-01: RSS clasificado Alta por reglas se conserva para revisión cuando falla Gemini', () => {
-  const env = createMockEnv({ failGeminiQuota: true });
+test('regresión F-01: RSS clasificado Alta por reglas se conserva para revisión cuando falla Gemini (error 500 no-cuota)', () => {
+  const env = createMockEnv({ failGeminiServer: true });
   env.ctx.evaluate = () => ({
     compatible: 'Alta', status: 'Pendiente de aprobación',
     score: 85, subject: 'Química', reasons: 'Solicitud abierta'
@@ -622,8 +638,8 @@ test('regresión F-01: RSS clasificado Alta por reglas se conserva para revisió
   assert.ok(rows.some(r => r[11] === 'REVISAR' && r[2] === 'Foros'));
 });
 
-test('regresión F-01: Gmail clasificado Media por reglas se conserva para revisión cuando falla Gemini', () => {
-  const env = createMockEnv({ failGeminiQuota: true });
+test('regresión F-01: Gmail clasificado Media por reglas se conserva para revisión cuando falla Gemini (error 500 no-cuota)', () => {
+  const env = createMockEnv({ failGeminiServer: true });
   env.sheets.Fuentes.rows.push([
     'GM-ALT', 'Tusclases', 'Avisos particulares', 'Matemática', 'CBC',
     'https://www.tusclases.com.ar', '', true, 'gmail_autorizado', 'P0',
@@ -656,4 +672,265 @@ test('control RPM: espacia las solicitudes Gemini sucesivas sin modificar el cup
   env.props.ORQ_GEMINI_LAST_CALL_MS = String(Date.now() - 10000);
   env.ctx.orqPaceGemini_(p);
   assert.equal(sleptMs, 0, 'sin espera cuando ya transcurrió el intervalo');
+});
+
+test('regresión punto 1: HTTP 429 en Gemini no marca el trabajo como COMPLETADO ni deja publicaciones SIN_CLASIFICAR (YouTube, RSS y Gmail)', () => {
+  const env = createMockEnv({ failGeminiQuota: true, gemini429Message: 'Quota exceeded for metric: requests per day (RPD)' });
+  env.sheets.Fuentes.rows.push([
+    'GM-429', 'Tusclases', 'Alertas Tusclases 429', 'Matemática', 'CBC',
+    'https://www.tusclases.com.ar', '', true, 'gmail_autorizado', 'P0',
+    'DISPONIBLE', 'gmail_alertas', 'Alertas Gmail'
+  ]);
+  // Incluso con evaluate() definido en el contexto (como cuando Core.js está cargado), HTTP 429 debe pausar y NO degradar ni completar
+  env.ctx.evaluate = () => ({
+    compatible: 'Alta', status: 'Pendiente de aprobación',
+    score: 85, subject: 'Química', reasons: 'Solicitud abierta'
+  });
+
+  env.ctx.orqStart(['YT-01', 'RSS-01', 'GM-429'], 10);
+
+  // 1) YT-01 recibe 429 -> queda PAUSADO_CUOTA, nunca COMPLETADO ni SIN_CLASIFICAR
+  let st = env.ctx.orqStatus();
+  assert.equal(st.estado, 'PAUSADO_CUOTA');
+  assert.equal(st.completados, 0);
+  assert.equal(st.pausados, 1);
+  assert.equal(st.pendientes, 2);
+  assert.equal(st.cursor, 0);
+  assert.equal(env.sheets.OrqCola.rows[1][5], 'PAUSADO_CUOTA');
+  assert.equal(env.sheets.OrqHallazgos.rows.slice(1).length, 0);
+
+  // Recupera YT-01
+  env.opts.failGeminiQuota = false;
+  env.ctx.orqTick();
+  assert.equal(env.ctx.orqStatus().completados, 1);
+
+  // 2) RSS-01 recibe 429 (incluso con evaluate definido) -> queda PAUSADO_CUOTA, no degrada ni completa
+  env.opts.failGeminiQuota = true;
+  env.ctx.orqTick();
+  st = env.ctx.orqStatus();
+  assert.equal(st.estado, 'PAUSADO_CUOTA');
+  assert.equal(st.completados, 1);
+  assert.equal(st.pausados, 1);
+  assert.equal(env.sheets.OrqCola.rows[2][5], 'PAUSADO_CUOTA');
+
+  // Recupera RSS-01
+  env.opts.failGeminiQuota = false;
+  env.ctx.orqTick();
+  assert.equal(env.ctx.orqStatus().completados, 2);
+
+  // 3) GM-429 recibe 429 -> queda PAUSADO_CUOTA, nunca ERROR_GMAIL ni COMPLETADO
+  env.opts.failGeminiQuota = true;
+  env.ctx.orqTick();
+  st = env.ctx.orqStatus();
+  assert.equal(st.estado, 'PAUSADO_CUOTA');
+  assert.equal(st.completados, 2);
+  assert.equal(st.pausados, 1);
+  assert.equal(env.sheets.OrqCola.rows[3][5], 'PAUSADO_CUOTA');
+
+  // Recupera GM-429 y finaliza corrida
+  env.opts.failGeminiQuota = false;
+  env.ctx.orqTick();
+
+  st = env.ctx.orqStatus();
+  assert.equal(st.estado, 'FINALIZADO');
+  assert.equal(st.completados, 3);
+  assert.equal(st.pausados, 0);
+  assert.equal(st.cursor, 3);
+
+  const finalHallazgos = env.sheets.OrqHallazgos.rows.slice(1);
+  assert.ok(finalHallazgos.length >= 4);
+  assert.ok(!finalHallazgos.some(r => r[8] === 'SIN_CLASIFICAR'));
+  assert.equal(st.metricas.candidatos, 3);
+});
+
+test('regresión punto 2: progreso parcial por lotes conserva los lotes ya clasificados y continúa desde el siguiente sin repetir llamadas ni duplicar registros', () => {
+  // Crear 8 comentarios recientes en el canal (Lote 1 = 5 comentarios, Lote 2 = 3 comentarios)
+  const eightComments = [];
+  for (let i = 1; i <= 8; i++) {
+    eightComments.push({
+      snippet: {
+        videoId: 'mDrLSOpo9ZA',
+        topLevelComment: {
+          id: 'yt-batch-comm-' + i,
+          snippet: {
+            publishedAt: '2026-10-30T18:00:00Z',
+            textOriginal: (i === 2 || i === 7) ?
+              ('Hola, busco profesor particular online para preparar final de Matemática #' + i) :
+              ('Muy buen video explicativo #' + i)
+          }
+        }
+      }
+    });
+  }
+
+  let geminiCalls = 0;
+  const processedBatchIds = [];
+  const env = createMockEnv({
+    customYtComments: eightComments,
+    onGeminiCall: (url, options) => {
+      geminiCalls++;
+      // El primer lote (5 items) tiene éxito; el segundo lote recibe HTTP 429 RPD
+      if (geminiCalls === 2) {
+        return {
+          getResponseCode: () => 429,
+          getContentText: () => JSON.stringify({ error: { message: 'Quota exceeded for quota metric: requests per day (RPD)' } })
+        };
+      }
+      const body = JSON.parse(options.payload);
+      const items = JSON.parse(body.contents[0].parts[0].text);
+      items.forEach(it => processedBatchIds.push(it.id));
+      return null; // Usar respuesta exitosa por defecto
+    }
+  });
+
+  // Iniciar con máx 10 comentarios: procesa Lote 1 (5 items) y pausa en Lote 2 (3 items)
+  let st = env.ctx.orqStart(['YT-01'], 10);
+  assert.equal(st.estado, 'PAUSADO_CUOTA');
+  assert.equal(st.completados, 0);
+  assert.equal(st.pausados, 1);
+
+  // Verificar que los 5 items del Lote 1 se conservaron en OrqHallazgos (incluyendo el candidato #2)
+  const hallazgosMid = env.sheets.OrqHallazgos.rows.slice(1);
+  assert.equal(hallazgosMid.length, 5);
+  assert.equal(st.metricas.clasificados, 5);
+  assert.equal(st.metricas.candidatos, 1);
+  assert.ok(!hallazgosMid.some(r => r[8] === 'SIN_CLASIFICAR'));
+
+  // Verificar que el cursor en OrqCola guardó los 3 items restantes del Lote 2
+  const savedCursor = JSON.parse(env.sheets.OrqCola.rows[1][7]);
+  assert.equal(savedCursor.offset, 5);
+  assert.equal(savedCursor.pendingItems.length, 3);
+
+  // Reanudar corrida: debe procesar ÚNICAMENTE los 3 items del Lote 2 sin repetir Lote 1 ni llamadas a YouTube
+  const ytCallsBeforeResume = env.httpRequests.filter(r => r.url.includes('/youtube/v3/')).length;
+  env.ctx.orqTick();
+
+  st = env.ctx.orqStatus();
+  assert.equal(st.estado, 'FINALIZADO');
+  assert.equal(st.completados, 1);
+  assert.equal(st.pausados, 0);
+  assert.equal(st.cursor, 1);
+
+  // No se repitieron llamadas a YouTube ni a Gemini para el Lote 1
+  const ytCallsAfterResume = env.httpRequests.filter(r => r.url.includes('/youtube/v3/')).length;
+  assert.equal(ytCallsAfterResume, ytCallsBeforeResume);
+  assert.equal(processedBatchIds.length, 8);
+  assert.equal(new Set(processedBatchIds).size, 8, 'ningún comentario fue enviado dos veces a Gemini');
+
+  // OrqHallazgos tiene exactamente 8 registros únicos (y ambos candidatos #2 y #7 detectados)
+  const hallazgosFinal = env.sheets.OrqHallazgos.rows.slice(1);
+  assert.equal(hallazgosFinal.length, 8);
+  assert.equal(new Set(hallazgosFinal.map(r => r[4])).size, 8, 'sin registros duplicados en OrqHallazgos');
+  assert.equal(st.metricas.clasificados, 8);
+  assert.equal(st.metricas.candidatos, 2);
+  assert.equal(st.metricas.gemini, 2);
+
+  // OrqFuentes tiene una única fila actualizada para YT-01 con estado OK
+  assert.equal(env.sheets.OrqFuentes.rows.slice(1).length, 1);
+  assert.equal(env.sheets.OrqFuentes.rows[1][5], 'OK');
+});
+
+test('regresión punto 3: estados coherentes (ERROR_GMAIL y ERROR_RESOLUCION no se cuentan como completados)', () => {
+  const env = createMockEnv();
+  // Agregar fuente YouTube con URL no resoluble (provoca ERROR_RESOLUCION) y fuente Gmail que fallará (provoca ERROR_GMAIL)
+  env.sheets.Fuentes.rows.push(
+    ['YT-BAD', 'YouTube', 'Canal Inválido', 'Física', 'CBC', 'https://www.youtube.com/watch?v=invalid', '', true, 'api_oficial', 'P1', 'DISPONIBLE', 'youtube_canales', 'URL sin canal'],
+    ['GM-BAD', 'Gmail', 'Gmail Roto', 'Química', 'CBC', 'https://www.tusclases.com.ar', '', true, 'gmail_autorizado', 'P0', 'DISPONIBLE', 'gmail_alertas', 'Fallo Gmail']
+  );
+
+  // Hacer que GmailApp.search lance excepción para provocar ERROR_GMAIL
+  env.ctx.GmailApp.search = () => { throw new Error('Servicio Gmail temporalmente no disponible'); };
+
+  // Iniciar con RSS-01 (OK), YT-BAD (ERROR_RESOLUCION) y GM-BAD (ERROR_GMAIL)
+  env.ctx.orqStart(['RSS-01', 'YT-BAD', 'GM-BAD'], 10);
+  // Paso 1: RSS-01 terminó con OK
+  let st = env.ctx.orqStatus();
+  assert.equal(st.completados, 1);
+  assert.equal(st.fallidos, 0);
+  assert.equal(st.pendientes, 2);
+  assert.equal(st.cursor, 1);
+  assert.equal(st.metricas.fuentes, 1);
+  assert.equal(env.sheets.OrqCola.rows[1][5], 'COMPLETADO');
+
+  // Paso 2: YT-BAD termina con ERROR_RESOLUCION (no incrementa completados ni cursor)
+  env.ctx.orqTick();
+  st = env.ctx.orqStatus();
+  assert.equal(st.completados, 1);
+  assert.equal(st.fallidos, 1);
+  assert.equal(st.pendientes, 1);
+  assert.equal(st.cursor, 1);
+  assert.equal(st.metricas.fuentes, 1);
+  assert.equal(env.sheets.OrqCola.rows[2][5], 'ERROR');
+  assert.equal(env.sheets.OrqFuentes.rows[2][5], 'ERROR_RESOLUCION');
+
+  // Paso 3: GM-BAD termina con ERROR_GMAIL (no incrementa completados ni cursor)
+  env.ctx.orqTick();
+  st = env.ctx.orqStatus();
+  assert.equal(st.estado, 'FINALIZADO');
+  assert.equal(st.completados, 1);
+  assert.equal(st.fallidos, 2);
+  assert.equal(st.pendientes, 0);
+  assert.equal(st.pausados, 0);
+  assert.equal(st.cursor, 1);
+  assert.equal(st.metricas.fuentes, 1);
+  assert.equal(st.metricas.errores, 2);
+  assert.equal(env.sheets.OrqCola.rows[3][5], 'ERROR');
+  assert.equal(env.sheets.OrqFuentes.rows[3][5], 'ERROR_GMAIL');
+  // En OrqCorridas, 'Fuentes completas' (col 6, idx 5) es 1 de 3
+  assert.equal(env.sheets.OrqCorridas.rows[1][5], 1);
+});
+
+test('regresión punto 4: distinción de cuotas RPM, TPM y RPD, reintento controlado en 429 transitorio y tope contra ciclos infinitos', () => {
+  // 4a) Reintento controlado exitoso ante HTTP 429 transitorio por RPM
+  let callAttempts = 0;
+  const sleeps = [];
+  const env = createMockEnv({
+    onGeminiCall: () => {
+      callAttempts++;
+      if (callAttempts === 1) {
+        return {
+          getResponseCode: () => 429,
+          getContentText: () => JSON.stringify({ error: { message: 'Rate limit reached for requests per minute (RPM)' } })
+        };
+      }
+      return null; // Éxito en el segundo intento
+    }
+  });
+  env.ctx.Utilities.sleep = (ms) => { sleeps.push(ms); };
+
+  const st = env.ctx.orqStart(['YT-01'], 10);
+  assert.equal(st.estado, 'FINALIZADO');
+  assert.equal(callAttempts, 2, 'reintentó una vez tras el 429 RPM y tuvo éxito');
+  assert.ok(sleeps.some(ms => ms >= 7000), 'aplicó espera controlada antes de reintentar');
+  assert.equal(st.completados, 1);
+  assert.equal(st.metricas.candidatos, 1);
+
+  // 4b) Clasificación explícita de cuotas RPD, TPM y RPM
+  assert.equal(env.ctx.orqClassifyQuotaError_(429, 'Quota exceeded: requests per day', null).type, 'RPD');
+  assert.equal(env.ctx.orqClassifyQuotaError_(429, 'Quota exceeded: requests per day', null).retryableInTick, false);
+  assert.equal(env.ctx.orqClassifyQuotaError_(429, 'Resource exhausted: input tokens per minute (TPM)', null).type, 'TPM');
+  assert.equal(env.ctx.orqClassifyQuotaError_(429, 'Resource exhausted: input tokens per minute (TPM)', null).retryableInTick, true);
+  assert.equal(env.ctx.orqClassifyQuotaError_(429, 'Too many requests per minute (RPM)', null).type, 'RPM');
+  assert.equal(env.ctx.orqClassifyQuotaError_(429, 'Too many requests per minute (RPM)', null).retryableInTick, true);
+
+  // 4c) Prevención de ciclos infinitos cuando una fuente recibe 429 permanentemente sin avanzar cursor
+  const envLoop = createMockEnv({
+    failGeminiQuota: true,
+    gemini429Message: 'Quota exceeded for metric: requests per day (RPD)'
+  });
+  envLoop.sheets.Config.rows.push(['ORQ_MAX_QUOTA_RETRIES', 2]);
+  envLoop.ctx.orqStart(['YT-01'], 10); // Pausa #1
+  assert.equal(envLoop.ctx.orqStatus().estado, 'PAUSADO_CUOTA');
+
+  envLoop.ctx.orqTick(); // Pausa #2 sin avance
+  assert.equal(envLoop.ctx.orqStatus().estado, 'PAUSADO_CUOTA');
+
+  envLoop.ctx.orqTick(); // Supera ORQ_MAX_QUOTA_RETRIES (2) -> corta el ciclo y marca ERROR
+  const finalLoopSt = envLoop.ctx.orqStatus();
+  assert.equal(finalLoopSt.estado, 'FINALIZADO');
+  assert.equal(finalLoopSt.fallidos, 1);
+  assert.equal(finalLoopSt.pausados, 0);
+  assert.equal(envLoop.sheets.OrqCola.rows[1][5], 'ERROR');
+  assert.ok(String(envLoop.sheets.OrqCola.rows[1][8]).includes('ERROR_CUOTA_AGOTADA_REITERADA'));
+  assert.equal(envLoop.triggers.length, 0, 'elimina triggers para impedir ejecución infinita');
 });

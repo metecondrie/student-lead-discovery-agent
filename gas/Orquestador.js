@@ -241,42 +241,91 @@ function orqSchedule_() {
   ScriptApp.newTrigger('orqTick').timeBased().after(30000).create();
 }
 
-/** Registros vistos para deduplicación */
+/** Registros vistos para deduplicación (excluye filas SIN_CLASIFICAR para no perderlas) */
 function orqSeen_(ss) {
   var known = {};
   orqRows_(orqSheet_(ss, 'OrqHallazgos')).forEach(function(r) {
-    if (r[4]) known[String(r[4])] = true;
+    if (r[4] && String(r[8]) !== 'SIN_CLASIFICAR') {
+      known[String(r[4])] = true;
+    }
   });
   return known;
 }
 
-/** Totales agregados de la corrida */
+/** Totales agregados de la corrida diferenciando completados, fallidos, pendientes y pausados */
 function orqTotals_(ss, runId) {
-  var res = { fuentes: 0, leidos: 0, repetidos: 0, clasificados: 0, solicitudes: 0, candidatos: 0, errores: 0, youtube: 0, gemini: 0, detalles: [] };
+  var res = {
+    fuentes: 0,
+    completados: 0,
+    fallidos: 0,
+    pendientes: 0,
+    pausados: 0,
+    omitidos: 0,
+    leidos: 0,
+    repetidos: 0,
+    clasificados: 0,
+    solicitudes: 0,
+    candidatos: 0,
+    errores: 0,
+    youtube: 0,
+    gemini: 0,
+    detalles: []
+  };
   orqRows_(orqSheet_(ss, 'OrqFuentes')).forEach(function(r) {
-    // Las pausas por cuota son intentos, no fuentes procesadas ni errores definitivos.
-    if (String(r[0]) !== runId || String(r[5]) === 'PAUSADO_CUOTA') return;
-    res.fuentes++;
+    if (String(r[0]) !== runId) return;
+    var st = String(r[5] || '');
+    var isPaused = (st === 'PAUSADO_CUOTA');
+    var isErr = /^ERROR/i.test(st);
+    var isOmit = /^OMITIDO/i.test(st);
+    var isSuccess = !isPaused && !isErr && !isOmit;
+
+    // Solo las fuentes que finalizaron exitosamente cuentan como procesadas/completas.
+    if (isSuccess) {
+      res.fuentes++;
+    }
+
     res.leidos += Number(r[6]) || 0;
     res.repetidos += Number(r[7]) || 0;
     res.clasificados += Number(r[8]) || 0;
     res.solicitudes += Number(r[9]) || 0;
     res.candidatos += Number(r[10]) || 0;
-    res.errores += Number(r[11]) || 0;
+    if (!isPaused) {
+      res.errores += Number(r[11]) || (isErr ? 1 : 0);
+    } else {
+      res.errores += Number(r[11]) || 0;
+    }
     res.youtube += Number(r[12]) || 0;
     res.gemini += Number(r[13]) || 0;
-    res.detalles.push({
-      fuenteId: String(r[2]),
-      nombre: String(r[3]),
-      conector: String(r[4]),
-      estado: String(r[5]),
-      leidos: Number(r[6]) || 0,
-      clasificados: Number(r[8]) || 0,
-      candidatos: Number(r[10]) || 0,
-      errores: Number(r[11]) || 0,
-      duracion: Number(r[14]) || 0
-    });
+
+    if (!isPaused || (Number(r[6]) || Number(r[8]) || Number(r[10]))) {
+      res.detalles.push({
+        fuenteId: String(r[2]),
+        nombre: String(r[3]),
+        conector: String(r[4]),
+        estado: st,
+        leidos: Number(r[6]) || 0,
+        clasificados: Number(r[8]) || 0,
+        candidatos: Number(r[10]) || 0,
+        errores: isPaused ? (Number(r[11]) || 0) : (Number(r[11]) || (isErr ? 1 : 0)),
+        duracion: Number(r[14]) || 0
+      });
+    }
   });
+
+  if (ss.getSheetByName('OrqCola')) {
+    orqRows_(ss.getSheetByName('OrqCola')).forEach(function(r) {
+      if (String(r[0]) !== runId) return;
+      var qState = String(r[5] || '');
+      if (qState === 'COMPLETADO') res.completados++;
+      else if (qState === 'ERROR') res.fallidos++;
+      else if (qState === 'PAUSADO_CUOTA') res.pausados++;
+      else if (qState === 'OMITIDO') res.omitidos++;
+      else if (qState === 'PENDIENTE' || qState === 'EN_PROCESO') res.pendientes++;
+    });
+  } else {
+    res.completados = res.fuentes;
+  }
+
   return res;
 }
 
@@ -446,13 +495,18 @@ function orqTick() {
         run.mensaje = 'Cuota restablecida. Reanudando búsqueda multifuente...';
         delete run.proximaReanudacion;
         delete run.motivoPausa;
+        delete run.tipoCuota;
 
-        // Resetear trabajos en OrqCola con estado PAUSADO_CUOTA a PENDIENTE
+        // Resetear trabajos en OrqCola con estado PAUSADO_CUOTA a PENDIENTE preservando Cursor
         var shColaResume = orqSheet_(ss, 'OrqCola');
         var cRows = orqRows_(shColaResume);
         for (var ci = 0; ci < cRows.length; ci++) {
           if (String(cRows[ci][0]) === run.id && String(cRows[ci][5]) === 'PAUSADO_CUOTA') {
-            shColaResume.getRange(ci + 2, 6, 1, 1).setValue('PENDIENTE');
+            var updatedRow = cRows[ci].slice();
+            while (updatedRow.length < 11) updatedRow.push('');
+            updatedRow[5] = 'PENDIENTE';
+            updatedRow[10] = new Date();
+            shColaResume.getRange(ci + 2, 1, 1, 11).setValues([updatedRow]);
           }
         }
         orqSaveRun_(run);
@@ -489,6 +543,10 @@ function orqTick() {
       var row = colaRows[i];
       if (String(row[0]) === run.id && String(row[5]) === 'PENDIENTE') {
         jobIdx = i + 2;
+        var parsedCursor = null;
+        if (row[7]) {
+          try { parsedCursor = JSON.parse(String(row[7])); } catch(e) {}
+        }
         job = {
           rowIdx: jobIdx,
           runId: String(row[0]),
@@ -496,7 +554,10 @@ function orqTick() {
           sourceId: String(row[2]),
           platform: String(row[3]),
           connector: String(row[4]),
-          attempts: Number(row[6]) || 0
+          attempts: Number(row[6]) || 0,
+          cursorRaw: String(row[7] || ''),
+          cursor: parsedCursor,
+          created: row[9] || new Date()
         };
         break;
       }
@@ -512,8 +573,11 @@ function orqTick() {
       return;
     }
 
-    // Marcar EN_PROCESO
-    shCola.getRange(job.rowIdx, 6, 1, 2).setValues([['EN_PROCESO', job.attempts + 1]]);
+    // Marcar EN_PROCESO preservando las 11 columnas
+    shCola.getRange(job.rowIdx, 1, 1, 11).setValues([[
+      job.runId, job.jobId, job.sourceId, job.platform, job.connector,
+      'EN_PROCESO', job.attempts + 1, job.cursorRaw, '', job.created, new Date()
+    ]]);
 
     // Cargar detalles de la fuente
     var allSources = orqSources_(ss);
@@ -530,30 +594,66 @@ function orqTick() {
       var gcap = typeof checkGeminiQuota_ === 'function' ?
         checkGeminiQuota_(p, { GEMINI_MAX_DAILY_CALLS: Number(cfg.GEMINI_MAX_DAILY_CALLS) || 20 }) : { allowed: true, count: 0, max: 20 };
       if (gcap.allowed === false || (gcap.max && (gcap.max - (gcap.count || 0)) <= 0)) {
-        throw new Error('PAUSADO_CUOTA: Límite diario de Gemini alcanzado (' + (gcap.count || 0) + '/' + (gcap.max || 20) + '). Se reanudará en la próxima ventana.');
+        var preErr = new Error('PAUSADO_CUOTA [RPD]: Límite diario de Gemini alcanzado (' + (gcap.count || 0) + '/' + (gcap.max || 20) + '). Se reanudará en la próxima ventana.');
+        preErr.isQuota = true;
+        preErr.quotaType = 'RPD';
+        throw preErr;
       }
 
       if (job.connector === 'youtube_canales') {
-        result = orqExecuteYouTube_(ss, run, source);
+        result = orqExecuteYouTube_(ss, run, source, job.cursor);
       } else if (job.connector === 'rss_foros') {
-        result = orqExecuteRss_(ss, run, source);
+        result = orqExecuteRss_(ss, run, source, job.cursor);
       } else if (job.connector === 'gmail_alertas') {
-        result = orqExecuteGmail_(ss, run, source);
+        result = orqExecuteGmail_(ss, run, source, job.cursor);
       } else {
         result = { estado: 'OMITIDO: conector no implementado', leidos: 0, repetidos: 0, clasificados: 0, solicitudes: 0, candidatos: 0, errores: 0, youtube: 0, gemini: 0, mensaje: '' };
       }
+
+      // Diferenciar estados coherentes en OrqCola: ERROR_GMAIL / ERROR_RESOLUCION / ERROR_* son trabajos fallidos (ERROR), no COMPLETADO
+      var resStateStr = String(result && result.estado || 'OK');
+      var isErrResult = /^ERROR/i.test(resStateStr);
+      var isOmitResult = /^OMITIDO/i.test(resStateStr);
+      var colaFinalState = isErrResult ? 'ERROR' : (isOmitResult ? 'OMITIDO' : 'COMPLETADO');
+      var colaErrMsg = isErrResult ? String(result.mensaje || resStateStr).slice(0, 160) : '';
+
       shCola.getRange(job.rowIdx, 1, 1, 11).setValues([[
         job.runId, job.jobId, job.sourceId, job.platform, job.connector,
-        'COMPLETADO', job.attempts + 1, '', '', now, new Date()
+        colaFinalState, job.attempts + 1, '', colaErrMsg, job.created, new Date()
       ]]);
     } catch(err) {
       var errMsg = String(err && err.message || err).slice(0, 160);
-      var isQuota = /cuota|quota|429|resource_exhausted/i.test(errMsg);
+      var isQuota = orqIsQuotaError_(err);
+      var qInfo = isQuota ? orqClassifyQuotaError_(err && err.httpStatus || 429, errMsg, null) : null;
+
+      var prevOffset = (job.cursor && Number(job.cursor.offset)) || 0;
+      var newOffset = (err && err.cursor && Number(err.cursor.offset)) || prevOffset;
+      var madeProgress = newOffset > prevOffset;
+      var prevPauseCount = (job.cursor && Number(job.cursor.pauseCount)) || 0;
+      var pauseCount = isQuota ? (madeProgress ? 1 : prevPauseCount + 1) : 0;
+      var maxQuotaPauses = Number(cfg.ORQ_MAX_QUOTA_RETRIES) || 5;
+
+      // Evitar ciclos infinitos si una fuente falla reiteradamente por cuota sin avanzar el cursor de lotes
+      if (isQuota && pauseCount > maxQuotaPauses) {
+        isQuota = false;
+        errMsg = ('ERROR_CUOTA_AGOTADA_REITERADA: ' + errMsg).slice(0, 160);
+      }
+
       var finalState = isQuota ? 'PAUSADO_CUOTA' : 'ERROR';
+      var cursorObj = (err && err.cursor) ? err.cursor : (job.cursor ? job.cursor : null);
+      if (cursorObj) {
+        cursorObj.pauseCount = pauseCount;
+      } else if (isQuota) {
+        cursorObj = { offset: 0, pauseCount: pauseCount };
+      }
+      var cursorStr = cursorObj ? JSON.stringify(cursorObj) : '';
+
       shCola.getRange(job.rowIdx, 1, 1, 11).setValues([[
         job.runId, job.jobId, job.sourceId, job.platform, job.connector,
-        finalState, job.attempts + 1, '', errMsg, now, new Date()
+        finalState, job.attempts + 1, cursorStr, errMsg, job.created, new Date()
       ]]);
+
+      var partial = (err && err.partialResult) ? err.partialResult : null;
       result = {
         runId: run.id,
         fecha: now,
@@ -561,55 +661,69 @@ function orqTick() {
         nombre: source.name,
         conector: job.connector,
         estado: finalState,
-        leidos: 0,
-        repetidos: 0,
-        clasificados: 0,
-        solicitudes: 0,
-        candidatos: 0,
-        errores: 1,
-        youtube: 0,
-        gemini: 0,
+        leidos: partial ? (Number(partial.leidos) || 0) : 0,
+        repetidos: partial ? (Number(partial.repetidos) || 0) : 0,
+        clasificados: partial ? (Number(partial.clasificados) || 0) : 0,
+        solicitudes: partial ? (Number(partial.solicitudes) || 0) : 0,
+        candidatos: partial ? (Number(partial.candidatos) || 0) : 0,
+        errores: isQuota ? (partial ? (Number(partial.errores) || 0) : 0) : Math.max(1, partial ? (Number(partial.errores) || 0) : 1),
+        youtube: partial ? (Number(partial.youtube) || 0) : 0,
+        gemini: partial ? (Number(partial.gemini) || 0) : 0,
         duracion: Math.round((Date.now() - tickStart) / 100) / 10,
         mensaje: errMsg
       };
       orqRecordFuente_(ss, result);
 
       if (isQuota) {
-        // Programar reanudación al siguiente reset (próxima medianoche o +1h)
+        // Distinguir ventana de espera según tipo de límite (RPM/TPM corto vs RPD diario)
         var resetDate = new Date();
-        resetDate.setHours(resetDate.getHours() + 1); // Ventana de 1h de seguridad
+        var waitMs = (qInfo && (qInfo.type === 'RPM' || qInfo.type === 'TPM')) ?
+          Math.min(3600000, 60000 * Math.max(1, pauseCount)) : 3600000;
+        resetDate = new Date(resetDate.getTime() + waitMs);
         run.estado = 'PAUSADO_CUOTA';
+        run.tipoCuota = qInfo ? qInfo.type : 'RPD';
         run.proximaReanudacion = resetDate.toISOString();
         run.motivoPausa = errMsg;
-        run.mensaje = 'Límite de cuota alcanzado (' + errMsg + '). Próxima reanudación: ' +
+        run.mensaje = 'Límite de cuota [' + run.tipoCuota + '] alcanzado (' + errMsg + '). Próxima reanudación: ' +
           Utilities.formatDate(resetDate, 'America/Argentina/Buenos_Aires', 'yyyy-MM-dd HH:mm');
         orqScheduleAt_(resetDate);
       }
     }
 
-    // Contar progreso
-    // Releer la cola actualizada: PAUSADO_CUOTA no cuenta como trabajo terminado.
-    var doneCount = orqRows_(shCola).filter(function(r) {
-      return String(r[0]) === run.id && ['COMPLETADO', 'ERROR', 'OMITIDO'].indexOf(String(r[5])) >= 0;
-    }).length;
-    run.cursor = doneCount;
+    // Contar progreso diferenciando completados, fallidos, pendientes y pausados.
+    // ERROR_GMAIL / ERROR_RESOLUCION / ERROR y PAUSADO_CUOTA no cuentan como completados exitosamente.
+    var updatedColaRows = orqRows_(shCola).filter(function(r) { return String(r[0]) === run.id; });
+    var completedCount = updatedColaRows.filter(function(r) { return String(r[5]) === 'COMPLETADO'; }).length;
+    var failedCount = updatedColaRows.filter(function(r) { return String(r[5]) === 'ERROR'; }).length;
+    var pausedCount = updatedColaRows.filter(function(r) { return String(r[5]) === 'PAUSADO_CUOTA'; }).length;
+    var pendingCount = updatedColaRows.filter(function(r) { return String(r[5]) === 'PENDIENTE'; }).length;
+
+    run.cursor = completedCount;
+    run.completados = completedCount;
+    run.fallidos = failedCount;
+    run.pausados = pausedCount;
+    run.pendientes = pendingCount;
+
     if (run.estado === 'EJECUTANDO') {
-      run.mensaje = 'Fuente procesada: ' + source.name + ' (' + result.estado + ')';
+      if (/^ERROR/i.test(String(result && result.estado || ''))) {
+        run.mensaje = 'Fuente con error: ' + source.name + ' (' + result.estado + ')';
+      } else {
+        run.mensaje = 'Fuente procesada: ' + source.name + ' (' + result.estado + ')';
+      }
     }
 
     orqSaveRun_(run);
     orqUpdateRunRow_(ss, run);
 
-    // Si aún quedan tareas y el run sigue activo, programar el siguiente paso
+    // Si aún quedan tareas PENDIENTE y el run sigue activo, programar el siguiente paso
     if (run.estado === 'EJECUTANDO') {
-      var remaining = colaRows.some(function(r, idx) {
-        return idx + 2 !== job.rowIdx && String(r[0]) === run.id && String(r[5]) === 'PENDIENTE';
-      });
-      if (remaining) {
+      if (pendingCount > 0) {
         orqSchedule_();
       } else {
         run.estado = 'FINALIZADO';
-        run.mensaje = 'Búsqueda multifuente completada con éxito.';
+        run.mensaje = failedCount > 0 ?
+          ('Búsqueda finalizada: ' + completedCount + ' completadas, ' + failedCount + ' con error.') :
+          'Búsqueda multifuente completada con éxito.';
         orqSaveRun_(run);
         orqUpdateRunRow_(ss, run);
         orqRemoveTriggers_();
@@ -643,12 +757,17 @@ function orqResume() {
   run.mensaje = 'Reanudación forzada por el usuario.';
   delete run.proximaReanudacion;
   delete run.motivoPausa;
+  delete run.tipoCuota;
 
   var shCola = orqSheet_(ss, 'OrqCola');
   var cRows = orqRows_(shCola);
   for (var ci = 0; ci < cRows.length; ci++) {
     if (String(cRows[ci][0]) === run.id && String(cRows[ci][5]) === 'PAUSADO_CUOTA') {
-      shCola.getRange(ci + 2, 6, 1, 1).setValues([['PENDIENTE']]);
+      var updatedRow = cRows[ci].slice();
+      while (updatedRow.length < 11) updatedRow.push('');
+      updatedRow[5] = 'PENDIENTE';
+      updatedRow[10] = new Date();
+      shCola.getRange(ci + 2, 1, 1, 11).setValues([updatedRow]);
     }
   }
   orqSaveRun_(run);
@@ -657,7 +776,41 @@ function orqResume() {
   return { ok: true, estado: 'EJECUTANDO', mensaje: 'Corrida reanudada.' };
 }
 
-function orqExecuteYouTube_(ss, run, source) {
+function orqFlushHallazgos_(ss, rows, known) {
+  if (!rows || !rows.length) return;
+  var shH = orqSheet_(ss, 'OrqHallazgos');
+  shH.getRange(shH.getLastRow() + 1, 1, rows.length, 16).setValues(rows);
+  if (known) {
+    rows.forEach(function(r) {
+      if (r[4] && String(r[8]) !== 'SIN_CLASIFICAR') known[String(r[4])] = true;
+    });
+  }
+}
+
+function orqAttachPartial_(err, res, pendingItems, offset, pauseCount) {
+  var errorObj = (err instanceof Error) ? err : new Error(String(err || 'Error en lote'));
+  var isQ = orqIsQuotaError_(errorObj);
+  res.estado = isQ ? 'PAUSADO_CUOTA' : (/^ERROR/i.test(res.estado) ? res.estado : 'ERROR');
+  res.mensaje = String(errorObj.message || errorObj).slice(0, 140);
+  if (!isQ) res.errores = (res.errores || 0) + 1;
+  errorObj.partialResult = res;
+  errorObj.cursor = {
+    offset: Number(offset) || 0,
+    pauseCount: Number(pauseCount) || 0,
+    leidos: res.leidos,
+    repetidos: res.repetidos,
+    clasificados: res.clasificados,
+    solicitudes: res.solicitudes,
+    candidatos: res.candidatos,
+    errores: res.errores,
+    youtube: res.youtube,
+    gemini: res.gemini,
+    pendingItems: Array.isArray(pendingItems) ? pendingItems : []
+  };
+  return errorObj;
+}
+
+function orqExecuteYouTube_(ss, run, source, jobCursor) {
   var tick = Date.now(), p = PropertiesService.getScriptProperties(), cfg = orqLoadConfig_();
   var ytKey = orqApiKey_('YOUTUBE_API_KEY');
   var gemKey = orqApiKey_('GEMINI_API_KEY');
@@ -670,114 +823,144 @@ function orqExecuteYouTube_(ss, run, source) {
     youtube: 0, gemini: 0, duracion: 0, mensaje: ''
   };
 
-  // Cuota YouTube
-  var ycap = typeof checkYouTubeQuota_ === 'function' ?
-    checkYouTubeQuota_(p, { YOUTUBE_MAX_DAILY_QUOTA: Number(cfg.YOUTUBE_MAX_DAILY_QUOTA) || 100 }) : { allowed: true };
-  if (!ycap.allowed) throw new Error('Cuota diaria de YouTube alcanzada');
-
-  // Resolver canal usando YouTubeCanales.js
-  var fetchFn = function(url, opts) { return UrlFetchApp.fetch(url, opts || { muteHttpExceptions: true }); };
-  var comments = [];
-  var resolved = null;
-  if (typeof ytChannelResolve === 'function') {
-    try {
-      resolved = ytChannelResolve(source, ytKey, fetchFn);
-      if (resolved && resolved.calls) {
-        res.youtube += resolved.calls;
-        if (typeof recordYouTubeQuota_ === 'function') recordYouTubeQuota_(p, resolved.calls);
-      }
-    } catch(e) {
-      resolved = { ok: false, error: String(e.message || e) };
-    }
-  }
-
-  if (resolved && resolved.ok && resolved.channelId) {
-    res.youtube++;
-    if (typeof recordYouTubeQuota_ === 'function') recordYouTubeQuota_(p, 1);
-    var stream = ytChannelFetchRecent(resolved.channelId, ytKey, fetchFn, {
-      maxAgeDays: 14,
-      maxResults: maxComments
-    });
-    comments = stream.items || [];
-    orqUpdateSourceState_(ss, source.id, 'OPERATIVA');
-  } else {
-    // Si no se pudo resolver el canal a partir del enlace o video semilla, fallar explícitamente.
-    // NUNCA simular búsqueda del canal consultando un video fijo sin recencia.
-    res.estado = 'ERROR_RESOLUCION';
-    res.errores++;
-    res.mensaje = resolved && resolved.error ? resolved.error : 'No se pudo resolver el canal a partir del recurso provisto';
-    orqUpdateSourceState_(ss, source.id, 'FALLO');
-    orqRecordFuente_(ss, res);
-    return res;
-  }
-  res.leidos = comments.length;
-
-  if (!comments.length) {
-    res.estado = 'SIN_COMENTARIOS_RECIENTES';
-    res.duracion = Math.round((Date.now() - tick) / 100) / 10;
-    orqRecordFuente_(ss, res);
-    return res;
-  }
-
-  // Deduplicación contra OrqHallazgos
   var known = orqSeen_(ss);
   var unclassified = [];
-  comments.forEach(function(c) {
-    if (known[c.id]) res.repetidos++;
-    else unclassified.push(c);
-  });
+  var baseOffset = 0;
 
-  // Clasificación con Gemini Flash-Lite
+  if (jobCursor && Array.isArray(jobCursor.pendingItems) && jobCursor.pendingItems.length > 0) {
+    res.leidos = Number(jobCursor.leidos) || 0;
+    res.repetidos = Number(jobCursor.repetidos) || 0;
+    res.clasificados = Number(jobCursor.clasificados) || 0;
+    res.solicitudes = Number(jobCursor.solicitudes) || 0;
+    res.candidatos = Number(jobCursor.candidatos) || 0;
+    res.errores = Number(jobCursor.errores) || 0;
+    res.youtube = Number(jobCursor.youtube) || 0;
+    res.gemini = Number(jobCursor.gemini) || 0;
+    baseOffset = Number(jobCursor.offset) || 0;
+    jobCursor.pendingItems.forEach(function(c) {
+      if (!known[c.id]) unclassified.push(c);
+    });
+  } else {
+    // Cuota YouTube
+    var ycap = typeof checkYouTubeQuota_ === 'function' ?
+      checkYouTubeQuota_(p, { YOUTUBE_MAX_DAILY_QUOTA: Number(cfg.YOUTUBE_MAX_DAILY_QUOTA) || 100 }) : { allowed: true };
+    if (!ycap.allowed) throw new Error('PAUSADO_CUOTA [RPD]: Cuota diaria de YouTube alcanzada');
+
+    // Resolver canal usando YouTubeCanales.js
+    var fetchFn = function(url, opts) { return UrlFetchApp.fetch(url, opts || { muteHttpExceptions: true }); };
+    var comments = [];
+    var resolved = null;
+    if (typeof ytChannelResolve === 'function') {
+      try {
+        resolved = ytChannelResolve(source, ytKey, fetchFn);
+        if (resolved && resolved.calls) {
+          res.youtube += resolved.calls;
+          if (typeof recordYouTubeQuota_ === 'function') recordYouTubeQuota_(p, resolved.calls);
+        }
+      } catch(e) {
+        if (orqIsQuotaError_(e)) throw e;
+        resolved = { ok: false, error: String(e.message || e) };
+      }
+    }
+
+    if (resolved && resolved.ok && resolved.channelId) {
+      res.youtube++;
+      if (typeof recordYouTubeQuota_ === 'function') recordYouTubeQuota_(p, 1);
+      var stream = ytChannelFetchRecent(resolved.channelId, ytKey, fetchFn, {
+        maxAgeDays: 14,
+        maxResults: maxComments
+      });
+      comments = stream.items || [];
+      orqUpdateSourceState_(ss, source.id, 'OPERATIVA');
+    } else {
+      // Si no se pudo resolver el canal a partir del enlace o video semilla, fallar explícitamente.
+      // NUNCA simular búsqueda del canal consultando un video fijo sin recencia.
+      res.estado = 'ERROR_RESOLUCION';
+      res.errores++;
+      res.mensaje = resolved && resolved.error ? resolved.error : 'No se pudo resolver el canal a partir del recurso provisto';
+      orqUpdateSourceState_(ss, source.id, 'FALLO');
+      orqRecordFuente_(ss, res);
+      return res;
+    }
+    res.leidos = comments.length;
+
+    if (!comments.length) {
+      res.estado = 'SIN_COMENTARIOS_RECIENTES';
+      res.duracion = Math.round((Date.now() - tick) / 100) / 10;
+      orqRecordFuente_(ss, res);
+      return res;
+    }
+
+    comments.forEach(function(c) {
+      if (known[c.id]) res.repetidos++;
+      else unclassified.push(c);
+    });
+  }
+
+  // Clasificación con Gemini Flash-Lite lote por lote, persistiendo cada lote completado
   var model = String(cfg.GEMINI_MODEL || 'gemini-3.5-flash-lite');
-  var hallazgosRows = [];
 
   for (var b = 0; b < unclassified.length; b += 5) {
     var gcap = typeof checkGeminiQuota_ === 'function' ?
       checkGeminiQuota_(p, { GEMINI_MAX_DAILY_CALLS: Number(cfg.GEMINI_MAX_DAILY_CALLS) || 20 }) : { allowed: true };
-    if (!gcap.allowed) { throw new Error('PAUSADO_CUOTA: Límite diario de Gemini alcanzado (' + (gcap.count || 0) + '/' + (gcap.max || 20) + ').'); }
-
-    var batch = unclassified.slice(b, b + 5);
-    res.gemini++;
-    if (typeof recordGeminiCall_ === 'function') recordGeminiCall_(p);
-
-    var byId = {};
-    try {
-      byId = orqCallGeminiBatch_(batch, model, gemKey);
-    } catch(err) {
-      res.errores++;
-      res.mensaje = String(err && err.message || err).slice(0, 140);
+    if (!gcap.allowed || (gcap.max && (gcap.max - (gcap.count || 0)) <= 0)) {
+      var qErr = new Error('PAUSADO_CUOTA [RPD]: Límite diario de Gemini alcanzado (' + (gcap.count || 0) + '/' + (gcap.max || 20) + ').');
+      qErr.isQuota = true;
+      qErr.quotaType = 'RPD';
+      throw orqAttachPartial_(qErr, res, unclassified.slice(b), baseOffset + b, jobCursor && jobCursor.pauseCount);
     }
 
+    var batch = unclassified.slice(b, b + 5);
+    var byId = {};
+    try {
+      byId = orqCallGeminiBatch_(batch, model, gemKey, cfg);
+      res.gemini++;
+      if (typeof recordGeminiCall_ === 'function') recordGeminiCall_(p);
+    } catch(err) {
+      throw orqAttachPartial_(err, res, unclassified.slice(b), baseOffset + b, jobCursor && jobCursor.pauseCount);
+    }
+
+    var batchRows = [];
+    var missingInBatch = [];
     batch.forEach(function(it) {
+      if (known[it.id]) return;
       var r = byId[it.id] || null;
-      var intention = !!(r && r.es_solicitud_clases === true);
-      var candidate = !!(r && intention &&
+      if (!r) {
+        missingInBatch.push(it);
+        return;
+      }
+      var intention = !!(r.es_solicitud_clases === true);
+      var candidate = !!(intention &&
         r.destinatario === 'pedido_abierto' &&
         r.oportunidad_comercial_alejo === true &&
         Number(r.confianza) >= 0.7 &&
         ['canal_publico_permitido', 'contacto_ofrecido_voluntariamente'].indexOf(r.contactabilidad) >= 0);
 
-      if (r) {
-        res.clasificados++;
-        if (intention) res.solicitudes++;
-        if (candidate) res.candidatos++;
-      } else {
-        res.errores++;
-      }
+      res.clasificados++;
+      if (intention) res.solicitudes++;
+      if (candidate) res.candidatos++;
 
-      hallazgosRows.push([
+      batchRows.push([
         run.id, new Date(), 'YouTube', source.name, it.id, it.url,
-        it.publishedAt, orqSafeText_(it.text), r ? String(intention) : 'SIN_CLASIFICAR',
-        r ? r.destinatario : '', r ? r.contactabilidad : '', candidate ? 'REVISAR' : 'NO',
-        r ? orqSafeText_(r.materia) : '', r ? orqSafeText_(r.nivel) : '',
-        r ? r.confianza : '', r ? orqSafeText_(r.resumen) : ''
+        it.publishedAt, orqSafeText_(it.text), String(intention),
+        r.destinatario || '', r.contactabilidad || '', candidate ? 'REVISAR' : 'NO',
+        orqSafeText_(r.materia), orqSafeText_(r.nivel),
+        r.confianza, orqSafeText_(r.resumen)
       ]);
     });
-  }
 
-  if (hallazgosRows.length) {
-    var shH = orqSheet_(ss, 'OrqHallazgos');
-    shH.getRange(shH.getLastRow() + 1, 1, hallazgosRows.length, 16).setValues(hallazgosRows);
+    orqFlushHallazgos_(ss, batchRows, known);
+
+    if (missingInBatch.length > 0) {
+      var remainingUnclassified = missingInBatch.concat(unclassified.slice(b + 5));
+      throw orqAttachPartial_(
+        new Error('Publicaciones pendientes de clasificación en lote YouTube (' + missingInBatch.length + ').'),
+        res,
+        remainingUnclassified,
+        baseOffset + b + batchRows.length,
+        jobCursor && jobCursor.pauseCount
+      );
+    }
   }
 
   res.duracion = Math.round((Date.now() - tick) / 100) / 10;
@@ -785,7 +968,7 @@ function orqExecuteYouTube_(ss, run, source) {
   return res;
 }
 
-function orqExecuteRss_(ss, run, source) {
+function orqExecuteRss_(ss, run, source, jobCursor) {
   var tick = Date.now(), p = PropertiesService.getScriptProperties(), cfg = orqLoadConfig_();
   var gemKey = orqApiKey_('GEMINI_API_KEY');
 
@@ -796,80 +979,110 @@ function orqExecuteRss_(ss, run, source) {
     youtube: 0, gemini: 0, duracion: 0, mensaje: ''
   };
 
-  if (!source.url) {
-    res.estado = 'ERROR_URL_RSS';
-    res.errores++;
-    res.mensaje = 'Fuente RSS sin URL';
-    orqUpdateSourceState_(ss, source.id, 'FALLO');
-    orqRecordFuente_(ss, res);
-    return res;
-  }
-
-  var response = UrlFetchApp.fetch(source.url, { muteHttpExceptions: true });
-  if (response.getResponseCode() !== 200) {
-    res.estado = 'ERROR_HTTP_' + response.getResponseCode();
-    res.errores++;
-    res.mensaje = 'Fallo al consultar feed: HTTP ' + response.getResponseCode();
-    orqUpdateSourceState_(ss, source.id, 'FALLO');
-    orqRecordFuente_(ss, res);
-    return res;
-  }
-
-  var xml = response.getContentText();
-  var items = typeof parseRss === 'function' ? parseRss(xml, 'rss', source.name) : [];
-  res.leidos = items.length;
-
-  if (!items.length) {
-    res.estado = 'SIN_NOVEDADES';
-    res.duracion = Math.round((Date.now() - tick) / 100) / 10;
-    orqUpdateSourceState_(ss, source.id, 'OPERATIVA');
-    orqRecordFuente_(ss, res);
-    return res;
-  }
-
-  // Filtrar publicaciones recientes (14 días) y con palabras clave de estudio/clases
-  var now = Date.now(), windowMs = 14 * 86400000;
-  var relevant = items.filter(function(it) {
-    var rawDate = it.publishedAt || it.date;
-    var at = rawDate ? new Date(rawDate).getTime() : now;
-    if (now - at > windowMs) return false;
-    var txt = ((it.title || '') + ' ' + (it.text || '')).toLowerCase();
-    return /clases|profesor|particular|parcial|final|ayuda|quimica|fisica|matematica|algebra|analisis/i.test(txt);
-  });
-
   var known = orqSeen_(ss);
   var unclassified = [];
-  relevant.forEach(function(it) {
-    var id = 'RSS-' + orqHash_(it.url || it.title);
-    it.computedId = id;
-    if (known[id]) res.repetidos++;
-    else unclassified.push(it);
-  });
+  var baseOffset = 0;
 
-  var hallazgosRows = [];
-  var model = String(cfg.GEMINI_MODEL || 'gemini-3.5-flash-lite');
-
-  // Procesar items en lotes de 5 sin descartar silenciosamente los restantes
-  for (var b = 0; b < unclassified.length; b += 5) {
-    var batch = unclassified.slice(b, b + 5).map(function(it) {
-      return { id: it.computedId, sourceLabel: 'Foro RSS', title: it.title, text: it.text.slice(0, 500), url: it.url, publishedAt: it.publishedAt || it.date };
+  if (jobCursor && Array.isArray(jobCursor.pendingItems) && jobCursor.pendingItems.length > 0) {
+    res.leidos = Number(jobCursor.leidos) || 0;
+    res.repetidos = Number(jobCursor.repetidos) || 0;
+    res.clasificados = Number(jobCursor.clasificados) || 0;
+    res.solicitudes = Number(jobCursor.solicitudes) || 0;
+    res.candidatos = Number(jobCursor.candidatos) || 0;
+    res.errores = Number(jobCursor.errores) || 0;
+    res.youtube = Number(jobCursor.youtube) || 0;
+    res.gemini = Number(jobCursor.gemini) || 0;
+    baseOffset = Number(jobCursor.offset) || 0;
+    jobCursor.pendingItems.forEach(function(it) {
+      var cid = it.computedId || it.id || ('RSS-' + orqHash_(it.url || it.title));
+      it.computedId = cid;
+      if (!known[cid]) unclassified.push(it);
     });
-
-    var gcap = typeof checkGeminiQuota_ === 'function' ?
-      checkGeminiQuota_(p, { GEMINI_MAX_DAILY_CALLS: Number(cfg.GEMINI_MAX_DAILY_CALLS) || 20 }) : { allowed: true };
-
-    var byId = {};
-    if (gcap.allowed) {
-      res.gemini++;
-      if (typeof recordGeminiCall_ === 'function') recordGeminiCall_(p);
-      try {
-        byId = orqCallGeminiBatch_(batch, model, gemKey);
-      } catch(e) {
-        res.errores++;
-      }
+  } else {
+    if (!source.url) {
+      res.estado = 'ERROR_URL_RSS';
+      res.errores++;
+      res.mensaje = 'Fuente RSS sin URL';
+      orqUpdateSourceState_(ss, source.id, 'FALLO');
+      orqRecordFuente_(ss, res);
+      return res;
     }
 
-    batch.forEach(function(it) {
+    var response = UrlFetchApp.fetch(source.url, { muteHttpExceptions: true });
+    if (response.getResponseCode() !== 200) {
+      res.estado = 'ERROR_HTTP_' + response.getResponseCode();
+      res.errores++;
+      res.mensaje = 'Fallo al consultar feed: HTTP ' + response.getResponseCode();
+      orqUpdateSourceState_(ss, source.id, 'FALLO');
+      orqRecordFuente_(ss, res);
+      return res;
+    }
+
+    var xml = response.getContentText();
+    var items = typeof parseRss === 'function' ? parseRss(xml, 'rss', source.name) : [];
+    res.leidos = items.length;
+
+    if (!items.length) {
+      res.estado = 'SIN_NOVEDADES';
+      res.duracion = Math.round((Date.now() - tick) / 100) / 10;
+      orqUpdateSourceState_(ss, source.id, 'OPERATIVA');
+      orqRecordFuente_(ss, res);
+      return res;
+    }
+
+    // Filtrar publicaciones recientes (14 días) y con palabras clave de estudio/clases
+    var now = Date.now(), windowMs = 14 * 86400000;
+    var relevant = items.filter(function(it) {
+      var rawDate = it.publishedAt || it.date;
+      var at = rawDate ? new Date(rawDate).getTime() : now;
+      if (now - at > windowMs) return false;
+      var txt = ((it.title || '') + ' ' + (it.text || '')).toLowerCase();
+      return /clases|profesor|particular|parcial|final|ayuda|quimica|fisica|matematica|algebra|analisis/i.test(txt);
+    });
+
+    relevant.forEach(function(it) {
+      var id = 'RSS-' + orqHash_(it.url || it.title);
+      it.computedId = id;
+      if (known[id]) res.repetidos++;
+      else unclassified.push(it);
+    });
+  }
+
+  var model = String(cfg.GEMINI_MODEL || 'gemini-3.5-flash-lite');
+
+  // Procesar items en lotes de 5 persistiendo cada lote y sin dejar SIN_CLASIFICAR
+  for (var b = 0; b < unclassified.length; b += 5) {
+    var gcap = typeof checkGeminiQuota_ === 'function' ?
+      checkGeminiQuota_(p, { GEMINI_MAX_DAILY_CALLS: Number(cfg.GEMINI_MAX_DAILY_CALLS) || 20 }) : { allowed: true };
+    if (!gcap.allowed || (gcap.max && (gcap.max - (gcap.count || 0)) <= 0)) {
+      var qErr = new Error('PAUSADO_CUOTA [RPD]: Límite diario de Gemini alcanzado (' + (gcap.count || 0) + '/' + (gcap.max || 20) + ').');
+      qErr.isQuota = true;
+      qErr.quotaType = 'RPD';
+      throw orqAttachPartial_(qErr, res, unclassified.slice(b), baseOffset + b, jobCursor && jobCursor.pauseCount);
+    }
+
+    var rawBatch = unclassified.slice(b, b + 5);
+    var batch = rawBatch.map(function(it) {
+      return { id: it.computedId, sourceLabel: 'Foro RSS', title: it.title, text: String(it.text || '').slice(0, 500), url: it.url, publishedAt: it.publishedAt || it.date };
+    });
+
+    var byId = {};
+    try {
+      byId = orqCallGeminiBatch_(batch, model, gemKey, cfg);
+      res.gemini++;
+      if (typeof recordGeminiCall_ === 'function') recordGeminiCall_(p);
+    } catch(e) {
+      if (orqIsQuotaError_(e) || typeof evaluate !== 'function') {
+        throw orqAttachPartial_(e, res, unclassified.slice(b), baseOffset + b, jobCursor && jobCursor.pauseCount);
+      }
+      res.errores++;
+    }
+
+    var batchRows = [];
+    var missingInBatch = [];
+    rawBatch.forEach(function(origIt, idx) {
+      var it = batch[idx];
+      if (known[it.id]) return;
       var r = byId[it.id] || null;
       var intention = false, candidate = false;
       if (r) {
@@ -879,7 +1092,7 @@ function orqExecuteRss_(ss, run, source) {
         if (intention) res.solicitudes++;
         if (candidate) res.candidatos++;
       } else if (typeof evaluate === 'function') {
-        // Fallback a evaluación por reglas para no perder items
+        // Fallback a evaluación por reglas solo ante fallos no-cuota de Gemini
         var ev = evaluate({ title: it.title, text: it.text, url: it.url, publishedAt: it.publishedAt, kind: 'tutoring' }, cfg, new Date(), {}, {});
         intention = ev.status !== 'Descartado';
         candidate = (['alta', 'media'].indexOf(String(ev.compatible || '').toLowerCase()) >= 0) && intention;
@@ -894,22 +1107,33 @@ function orqExecuteRss_(ss, run, source) {
           confianza: ev.score >= 5 ? 0.9 : 0.7,
           resumen: ev.reasons || ''
         };
+      } else {
+        missingInBatch.push(origIt);
+        return;
       }
 
       var pubStr = it.publishedAt ? new Date(it.publishedAt).toISOString() : new Date().toISOString();
-      hallazgosRows.push([
+      batchRows.push([
         run.id, new Date(), 'Foros', source.name, it.id, it.url,
-        pubStr, orqSafeText_(it.text), r ? String(intention) : 'SIN_CLASIFICAR',
-        r ? r.destinatario : '', r ? r.contactabilidad : '', candidate ? 'REVISAR' : 'NO',
-        r ? orqSafeText_(r.materia) : '', r ? orqSafeText_(r.nivel) : '',
-        r ? r.confianza : '', r ? orqSafeText_(r.resumen) : ''
+        pubStr, orqSafeText_(it.text), String(intention),
+        r.destinatario || '', r.contactabilidad || '', candidate ? 'REVISAR' : 'NO',
+        orqSafeText_(r.materia), orqSafeText_(r.nivel),
+        r.confianza, orqSafeText_(r.resumen)
       ]);
     });
-  }
 
-  if (hallazgosRows.length) {
-    var shH = orqSheet_(ss, 'OrqHallazgos');
-    shH.getRange(shH.getLastRow() + 1, 1, hallazgosRows.length, 16).setValues(hallazgosRows);
+    orqFlushHallazgos_(ss, batchRows, known);
+
+    if (missingInBatch.length > 0) {
+      var remainingRss = missingInBatch.concat(unclassified.slice(b + 5));
+      throw orqAttachPartial_(
+        new Error('Publicaciones RSS pendientes de clasificación (' + missingInBatch.length + ').'),
+        res,
+        remainingRss,
+        baseOffset + b + batchRows.length,
+        jobCursor && jobCursor.pauseCount
+      );
+    }
   }
 
   orqUpdateSourceState_(ss, source.id, 'OPERATIVA');
@@ -918,7 +1142,7 @@ function orqExecuteRss_(ss, run, source) {
   return res;
 }
 
-function orqExecuteGmail_(ss, run, source) {
+function orqExecuteGmail_(ss, run, source, jobCursor) {
   var tick = Date.now(), p = PropertiesService.getScriptProperties(), cfg = orqLoadConfig_();
   var gemKey = orqApiKey_('GEMINI_API_KEY');
   var res = {
@@ -928,214 +1152,361 @@ function orqExecuteGmail_(ss, run, source) {
     youtube: 0, gemini: 0, duracion: 0, mensaje: ''
   };
 
-  try {
-    // Determinar consulta específica por fuente
-    var plat = String(source.platform || '').toLowerCase();
-    var name = String(source.name || '').toLowerCase();
-    var url = String(source.url || '').toLowerCase();
-    var query = 'newer_than:7d ';
+  var known = orqSeen_(ss);
+  var candidateItems = [];
+  var baseOffset = 0;
 
-    if (plat.indexOf('tusclases') >= 0 || url.indexOf('tusclases') >= 0 || name.indexOf('tusclases') >= 0) {
-      query += 'from:(tusclases.com.ar OR tusclasesparticulares.com OR noreply@tusclases.com.ar)';
-      if (source.topics && /quimica|fisica|matematica|biologia/i.test(source.topics)) {
-        query += ' ' + source.topics.split(';')[0].trim();
-      }
-    } else if (plat.indexOf('superprof') >= 0 || url.indexOf('superprof') >= 0 || name.indexOf('superprof') >= 0) {
-      query += 'from:(superprof.com.ar OR superprof.es OR superprof.co OR superprof.com)';
-    } else if (name.indexOf('google alerts') >= 0 || name.indexOf('alertas') >= 0) {
-      query += 'from:alert-noreply@google.com';
-    } else {
-      query += 'from:(tusclases.com.ar OR superprof.com.ar OR alert-noreply@google.com)';
-    }
+  if (jobCursor && Array.isArray(jobCursor.pendingItems) && jobCursor.pendingItems.length > 0) {
+    res.leidos = Number(jobCursor.leidos) || 0;
+    res.repetidos = Number(jobCursor.repetidos) || 0;
+    res.clasificados = Number(jobCursor.clasificados) || 0;
+    res.solicitudes = Number(jobCursor.solicitudes) || 0;
+    res.candidatos = Number(jobCursor.candidatos) || 0;
+    res.errores = Number(jobCursor.errores) || 0;
+    res.youtube = Number(jobCursor.youtube) || 0;
+    res.gemini = Number(jobCursor.gemini) || 0;
+    baseOffset = Number(jobCursor.offset) || 0;
+    jobCursor.pendingItems.forEach(function(it) {
+      var cid = it._computedId || it.id;
+      it._computedId = cid;
+      if (!known[cid]) candidateItems.push(it);
+    });
+  } else {
+    try {
+      // Determinar consulta específica por fuente
+      var plat = String(source.platform || '').toLowerCase();
+      var name = String(source.name || '').toLowerCase();
+      var url = String(source.url || '').toLowerCase();
+      var query = 'newer_than:7d ';
 
-    // GmailThread es un objeto de servicio: al persistir ORQ_RUN como JSON pierde
-    // getMessages()/getId(). No cachearlo en el estado serializado entre triggers.
-    // Reconsultar una búsqueda acotada y deduplicar resultados en la planilla.
-    var threads = typeof GmailApp !== 'undefined' ? GmailApp.search(query, 0, 15) : [];
-
-    var known = orqSeen_(ss);
-    var candidateItems = [];
-
-    threads.forEach(function(th) {
-      var msgs = th.getMessages();
-      msgs.forEach(function(m) {
-        res.leidos++;
-        var emailData = {
-          id: m.getId(),
-          threadId: th.getId(),
-          from: m.getFrom(),
-          subject: m.getSubject(),
-          date: m.getDate(),
-          plain: m.getPlainBody(),
-          html: m.getBody()
-        };
-        var extracted = typeof extractFromEmail === 'function' ? extractFromEmail(emailData, cfg) : { items: [] };
-
-        // Si el extractor descartó el correo (confirmación de aviso, no es solicitud, etc.), no crear candidatos falsos
-        if (extracted.ignored || !extracted.items || !extracted.items.length) {
-          return;
+      if (plat.indexOf('tusclases') >= 0 || url.indexOf('tusclases') >= 0 || name.indexOf('tusclases') >= 0) {
+        query += 'from:(tusclases.com.ar OR tusclasesparticulares.com OR noreply@tusclases.com.ar)';
+        if (source.topics && /quimica|fisica|matematica|biologia/i.test(source.topics)) {
+          query += ' ' + source.topics.split(';')[0].trim();
         }
+      } else if (plat.indexOf('superprof') >= 0 || url.indexOf('superprof') >= 0 || name.indexOf('superprof') >= 0) {
+        query += 'from:(superprof.com.ar OR superprof.es OR superprof.co OR superprof.com)';
+      } else if (name.indexOf('google alerts') >= 0 || name.indexOf('alertas') >= 0) {
+        query += 'from:alert-noreply@google.com';
+      } else {
+        query += 'from:(tusclases.com.ar OR superprof.com.ar OR alert-noreply@google.com)';
+      }
 
-        extracted.items.forEach(function(it) {
-          var id = it.id || ('GMAIL-' + orqHash_(it.url || (m.getId() + '_' + it.title)));
-          if (known[id]) { res.repetidos++; return; }
+      // GmailThread es un objeto de servicio: al persistir ORQ_RUN como JSON pierde
+      // getMessages()/getId(). No cachearlo en el estado serializado entre triggers.
+      // Reconsultar una búsqueda acotada y deduplicar resultados en la planilla.
+      var threads = typeof GmailApp !== 'undefined' ? GmailApp.search(query, 0, 15) : [];
 
-          // Evaluar calidad con evaluate() de Core.js
-          var ev = typeof evaluate === 'function' ?
-            evaluate(it, cfg, new Date(), {}, {}) : { compatible: 'media', status: 'Evaluado', score: 3 };
+      threads.forEach(function(th) {
+        var msgs = th.getMessages();
+        msgs.forEach(function(m) {
+          res.leidos++;
+          var emailData = {
+            id: m.getId(),
+            threadId: th.getId(),
+            from: m.getFrom(),
+            subject: m.getSubject(),
+            date: m.getDate(),
+            plain: m.getPlainBody(),
+            html: m.getBody()
+          };
+          var extracted = typeof extractFromEmail === 'function' ? extractFromEmail(emailData, cfg) : { items: [] };
 
-          // Excluir descartes estrictos (avisos institucionales, materias fuera de perfil, etc.)
-          if (ev.status === 'Descartado' || ev.compatible === 'no') {
+          // Si el extractor descartó el correo (confirmación de aviso, no es solicitud, etc.), no crear candidatos falsos
+          if (extracted.ignored || !extracted.items || !extracted.items.length) {
             return;
           }
 
-          it._computedId = id;
-          it._ev = ev;
-          candidateItems.push(it);
+          extracted.items.forEach(function(it) {
+            var id = it.id || ('GMAIL-' + orqHash_(it.url || (m.getId() + '_' + it.title)));
+            if (known[id]) { res.repetidos++; return; }
+
+            // Evaluar calidad con evaluate() de Core.js
+            var ev = typeof evaluate === 'function' ?
+              evaluate(it, cfg, new Date(), {}, {}) : { compatible: 'media', status: 'Evaluado', score: 3 };
+
+            // Excluir descartes estrictos (avisos institucionales, materias fuera de perfil, etc.)
+            if (ev.status === 'Descartado' || ev.compatible === 'no') {
+              return;
+            }
+
+            it._computedId = id;
+            it._ev = ev;
+            candidateItems.push(it);
+          });
         });
       });
-    });
-
-    // Clasificación con Gemini (si hay cuota) o regla validada de 4 dimensiones
-    var hallazgosRows = [];
-    var model = String(cfg.GEMINI_MODEL || 'gemini-3.5-flash-lite');
-
-    for (var b = 0; b < candidateItems.length; b += 5) {
-      var batch = candidateItems.slice(b, b + 5);
-      var gcap = typeof checkGeminiQuota_ === 'function' ?
-        checkGeminiQuota_(p, { GEMINI_MAX_DAILY_CALLS: Number(cfg.GEMINI_MAX_DAILY_CALLS) || 20 }) : { allowed: true };
-
-      var byId = {};
-      if (gcap.allowed) {
-        res.gemini++;
-        if (typeof recordGeminiCall_ === 'function') recordGeminiCall_(p);
-        try {
-          var gemBatch = batch.map(function(it){ return { id: it._computedId, sourceLabel: 'Gmail', title: it.title, text: (it.text || '').slice(0, 500), url: it.url }; });
-          byId = orqCallGeminiBatch_(gemBatch, model, gemKey);
-        } catch(e) {
-          res.errores++;
-        }
-      }
-
-      batch.forEach(function(it) {
-        var r = byId[it._computedId] || null;
-        var intention = false, candidate = false;
-
-        if (r) {
-          intention = !!(r.es_solicitud_clases === true);
-          candidate = !!(intention && r.destinatario === 'pedido_abierto' && r.oportunidad_comercial_alejo === true &&
-            ['canal_publico_permitido', 'contacto_ofrecido_voluntariamente'].indexOf(r.contactabilidad) >= 0);
-          res.clasificados++;
-          if (intention) res.solicitudes++;
-          if (candidate) res.candidatos++;
-        } else {
-          // Evaluación por motor determinista de Core.js
-          var ev = it._ev;
-          intention = true;
-          candidate = (['alta', 'media'].indexOf(String(ev.compatible || '').toLowerCase()) >= 0);
-          res.clasificados++;
-          res.solicitudes++;
-          if (candidate) res.candidatos++;
-          r = {
-            destinatario: 'pedido_abierto',
-            contactabilidad: 'contacto_ofrecido_voluntariamente',
-            materia: ev.subject || it.title || '',
-            nivel: it.level || '',
-            confianza: ev.score >= 5 ? 0.9 : 0.75,
-            resumen: ev.reasons || 'Solicitud de alumno extraída de alerta de plataforma docente'
-          };
-        }
-
-        var pubDateStr = '';
-        if (it.publishedAt) {
-          try { pubDateStr = new Date(it.publishedAt).toISOString(); } catch(e) {}
-        }
-        if (!pubDateStr) pubDateStr = new Date().toISOString();
-
-        hallazgosRows.push([
-          run.id, new Date(), 'Gmail', source.name, it._computedId, it.url || it.gmailLink,
-          pubDateStr, orqSafeText_(it.text || it.title),
-          String(intention), r.destinatario, r.contactabilidad, candidate ? 'REVISAR' : 'NO',
-          orqSafeText_(r.materia), orqSafeText_(r.nivel), r.confianza, orqSafeText_(r.resumen)
-        ]);
-      });
+    } catch(gmailErr) {
+      if (orqIsQuotaError_(gmailErr)) throw gmailErr;
+      res.errores++;
+      res.estado = 'ERROR_GMAIL';
+      res.mensaje = String(gmailErr && gmailErr.message || gmailErr).slice(0, 140);
+      orqUpdateSourceState_(ss, source.id, 'FALLO');
+      res.duracion = Math.round((Date.now() - tick) / 100) / 10;
+      orqRecordFuente_(ss, res);
+      return res;
     }
-
-    if (hallazgosRows.length) {
-      var shH = orqSheet_(ss, 'OrqHallazgos');
-      shH.getRange(shH.getLastRow() + 1, 1, hallazgosRows.length, 16).setValues(hallazgosRows);
-    }
-    orqUpdateSourceState_(ss, source.id, 'OPERATIVA');
-  } catch(e) {
-    res.errores++;
-    res.estado = 'ERROR_GMAIL';
-    res.mensaje = String(e && e.message || e).slice(0, 140);
-    orqUpdateSourceState_(ss, source.id, 'FALLO');
   }
 
+  // Clasificación con Gemini por lotes, persistiendo progreso parcial y respetando pausas de cuota
+  var model = String(cfg.GEMINI_MODEL || 'gemini-3.5-flash-lite');
+
+  for (var b = 0; b < candidateItems.length; b += 5) {
+    var gcap = typeof checkGeminiQuota_ === 'function' ?
+      checkGeminiQuota_(p, { GEMINI_MAX_DAILY_CALLS: Number(cfg.GEMINI_MAX_DAILY_CALLS) || 20 }) : { allowed: true };
+    if (!gcap.allowed || (gcap.max && (gcap.max - (gcap.count || 0)) <= 0)) {
+      var qErr = new Error('PAUSADO_CUOTA [RPD]: Límite diario de Gemini alcanzado (' + (gcap.count || 0) + '/' + (gcap.max || 20) + ').');
+      qErr.isQuota = true;
+      qErr.quotaType = 'RPD';
+      throw orqAttachPartial_(qErr, res, candidateItems.slice(b), baseOffset + b, jobCursor && jobCursor.pauseCount);
+    }
+
+    var batch = candidateItems.slice(b, b + 5);
+    var byId = {};
+    try {
+      var gemBatch = batch.map(function(it){ return { id: it._computedId, sourceLabel: 'Gmail', title: it.title, text: (it.text || '').slice(0, 500), url: it.url }; });
+      byId = orqCallGeminiBatch_(gemBatch, model, gemKey, cfg);
+      res.gemini++;
+      if (typeof recordGeminiCall_ === 'function') recordGeminiCall_(p);
+    } catch(e) {
+      if (orqIsQuotaError_(e) || typeof evaluate !== 'function') {
+        throw orqAttachPartial_(e, res, candidateItems.slice(b), baseOffset + b, jobCursor && jobCursor.pauseCount);
+      }
+      res.errores++;
+    }
+
+    var batchRows = [];
+    batch.forEach(function(it) {
+      if (known[it._computedId]) return;
+      var r = byId[it._computedId] || null;
+      var intention = false, candidate = false;
+
+      if (r) {
+        intention = !!(r.es_solicitud_clases === true);
+        candidate = !!(intention && r.destinatario === 'pedido_abierto' && r.oportunidad_comercial_alejo === true &&
+          ['canal_publico_permitido', 'contacto_ofrecido_voluntariamente'].indexOf(r.contactabilidad) >= 0);
+        res.clasificados++;
+        if (intention) res.solicitudes++;
+        if (candidate) res.candidatos++;
+      } else {
+        // Evaluación por motor determinista de Core.js ante fallo no-cuota de Gemini
+        var ev = it._ev || { compatible: 'media', status: 'Evaluado', score: 3 };
+        intention = true;
+        candidate = (['alta', 'media'].indexOf(String(ev.compatible || '').toLowerCase()) >= 0);
+        res.clasificados++;
+        res.solicitudes++;
+        if (candidate) res.candidatos++;
+        r = {
+          destinatario: 'pedido_abierto',
+          contactabilidad: 'contacto_ofrecido_voluntariamente',
+          materia: ev.subject || it.title || '',
+          nivel: it.level || '',
+          confianza: ev.score >= 5 ? 0.9 : 0.75,
+          resumen: ev.reasons || 'Solicitud de alumno extraída de alerta de plataforma docente'
+        };
+      }
+
+      var pubDateStr = '';
+      if (it.publishedAt) {
+        try { pubDateStr = new Date(it.publishedAt).toISOString(); } catch(e) {}
+      }
+      if (!pubDateStr) pubDateStr = new Date().toISOString();
+
+      batchRows.push([
+        run.id, new Date(), 'Gmail', source.name, it._computedId, it.url || it.gmailLink,
+        pubDateStr, orqSafeText_(it.text || it.title),
+        String(intention), r.destinatario, r.contactabilidad, candidate ? 'REVISAR' : 'NO',
+        orqSafeText_(r.materia), orqSafeText_(r.nivel), r.confianza, orqSafeText_(r.resumen)
+      ]);
+    });
+
+    orqFlushHallazgos_(ss, batchRows, known);
+  }
+
+  orqUpdateSourceState_(ss, source.id, 'OPERATIVA');
   res.duracion = Math.round((Date.now() - tick) / 100) / 10;
   orqRecordFuente_(ss, res);
   return res;
 }
 
+function orqIsQuotaError_(errOrMsg) {
+  if (!errOrMsg) return false;
+  if (typeof errOrMsg === 'object' && errOrMsg.isQuota === true) return true;
+  var msg = String(errOrMsg.message || errOrMsg);
+  return /PAUSADO_CUOTA|cuota|quota|429|resource_exhausted|rate.?limit|too many requests/i.test(msg);
+}
+
 /**
- * Control preventivo de RPM para el orquestador STAGING.
- * Espacia cada petición Gemini >= 7 segundos (aprox. 8-9 RPM), por debajo
- * de los 15 RPM disponibles en Gemini 3.5 Flash-Lite del proyecto revisado.
- * No cambia ni intenta eludir la cuota real RPD/TPM de Google.
- * orqTick ya usa el LockService del script: no hay llamadas concurrentes del orquestador.
+ * Distingue el tipo de límite de cuota alcanzado:
+ * - RPD: límite diario de solicitudes (reinicia a medianoche del Pacífico; no reintentable en el mismo tick).
+ * - TPM: límite de tokens por minuto (reintentable con espera controlada).
+ * - RPM: límite de solicitudes por minuto (reintentable con espera controlada).
  */
-function orqPaceGemini_(p) {
-  var minMs = 7000;
+function orqClassifyQuotaError_(status, msg, gcap) {
+  var text = String(msg || '');
+  if ((gcap && gcap.allowed === false) || /\[RPD\]|per.?day|daily|rpd|day.?limit|cuota diaria|l[ií]mite diario/i.test(text)) {
+    return { isQuota: true, type: 'RPD', retryableInTick: false };
+  }
+  if (/\[TPM\]|token|tpm|tokens per minute|input_token/i.test(text)) {
+    return { isQuota: true, type: 'TPM', retryableInTick: true };
+  }
+  return { isQuota: true, type: 'RPM', retryableInTick: true };
+}
+
+function orqEstimateTokens_(text) {
+  return Math.max(1, Math.ceil(String(text || '').length / 4)) + 256;
+}
+
+/**
+ * Control preventivo de cuotas RPM y TPM para el orquestador STAGING:
+ * - RPM: espacia cada petición Gemini >= 7 segundos (aprox. 8-9 RPM, bajo los 15 RPM de Flash-Lite)
+ *   y controla la ventana móvil de 60 segundos.
+ * - TPM: contabiliza tokens estimados en la ventana móvil de 60 segundos y espera si se acerca al tope.
+ * - No modifica el contador RPD diario de Google.
+ */
+function orqPaceGemini_(p, cfg, estimatedTokens) {
+  var minMs = (cfg && Number(cfg.GEMINI_MIN_INTERVAL_MS) > 0) ? Number(cfg.GEMINI_MIN_INTERVAL_MS) : 7000;
   var lastMs = Number(p.getProperty('ORQ_GEMINI_LAST_CALL_MS') || 0);
   var waitMs = Math.max(0, minMs - (Date.now() - lastMs));
   if (waitMs > 0 && typeof Utilities !== 'undefined' && typeof Utilities.sleep === 'function') {
     Utilities.sleep(waitMs);
   }
+
+  // Control de ventana RPM (solicitudes por minuto)
+  var maxRpm = (cfg && Number(cfg.GEMINI_MAX_RPM) > 0) ? Number(cfg.GEMINI_MAX_RPM) : 12;
+  var nowRpm = Date.now();
+  var rpmWinStart = Number(p.getProperty('ORQ_GEMINI_RPM_WIN_MS') || 0);
+  var rpmCount = Number(p.getProperty('ORQ_GEMINI_RPM_COUNT') || 0);
+  if (rpmWinStart <= 0 || (nowRpm - rpmWinStart) >= 60000) {
+    rpmWinStart = nowRpm;
+    rpmCount = 0;
+  }
+  if (rpmCount >= maxRpm) {
+    var rpmWait = Math.max(1000, 60000 - (nowRpm - rpmWinStart));
+    if (typeof Utilities !== 'undefined' && typeof Utilities.sleep === 'function') {
+      Utilities.sleep(rpmWait);
+    }
+    rpmWinStart = Date.now();
+    rpmCount = 0;
+  }
+  p.setProperty('ORQ_GEMINI_RPM_WIN_MS', String(rpmWinStart));
+  p.setProperty('ORQ_GEMINI_RPM_COUNT', String(rpmCount + 1));
+
+  // Control de ventana TPM (tokens por minuto)
+  var tokens = Number(estimatedTokens) || 0;
+  if (tokens > 0) {
+    var maxTpm = (cfg && Number(cfg.GEMINI_MAX_TPM) > 0) ? Number(cfg.GEMINI_MAX_TPM) : 250000;
+    var nowTpm = Date.now();
+    var tpmWinStart = Number(p.getProperty('ORQ_GEMINI_TPM_WIN_MS') || 0);
+    var tpmUsed = Number(p.getProperty('ORQ_GEMINI_TPM_USED') || 0);
+    if (tpmWinStart <= 0 || (nowTpm - tpmWinStart) >= 60000) {
+      tpmWinStart = nowTpm;
+      tpmUsed = 0;
+    }
+    if (tokens > maxTpm) {
+      var tpmMaxErr = new Error('PAUSADO_CUOTA [TPM]: El lote estimado (' + tokens + ' tokens) excede el límite TPM (' + maxTpm + ').');
+      tpmMaxErr.isQuota = true;
+      tpmMaxErr.quotaType = 'TPM';
+      throw tpmMaxErr;
+    }
+    if ((tpmUsed + tokens) > maxTpm) {
+      var tpmWait = Math.max(1000, 60000 - (nowTpm - tpmWinStart));
+      if (typeof Utilities !== 'undefined' && typeof Utilities.sleep === 'function') {
+        Utilities.sleep(tpmWait);
+      }
+      tpmWinStart = Date.now();
+      tpmUsed = 0;
+    }
+    p.setProperty('ORQ_GEMINI_TPM_WIN_MS', String(tpmWinStart));
+    p.setProperty('ORQ_GEMINI_TPM_USED', String(tpmUsed + tokens));
+  }
+
   p.setProperty('ORQ_GEMINI_LAST_CALL_MS', String(Date.now()));
 }
 
-function orqCallGeminiBatch_(batch, model, key) {
-  orqPaceGemini_(PropertiesService.getScriptProperties());
+function orqCallGeminiBatch_(batch, model, key, cfg) {
+  var p = PropertiesService.getScriptProperties();
   var prompt = typeof buildGeminiPrompt === 'function' ? buildGeminiPrompt(batch) : JSON.stringify(batch);
+  var estTokens = orqEstimateTokens_(prompt);
   var url = 'https://generativelanguage.googleapis.com/v1beta/models/' +
     encodeURIComponent(model) + ':generateContent';
 
-  var res = UrlFetchApp.fetch(url, {
-    method: 'post',
-    contentType: 'application/json',
-    headers: { 'x-goog-api-key': key },
-    payload: JSON.stringify({
-      contents: [{ parts: [{ text: prompt }] }],
-      generationConfig: { temperature: 0.1, responseMimeType: 'application/json', maxOutputTokens: 8192 }
-    }),
-    muteHttpExceptions: true
-  });
+  var maxRetries = (cfg && typeof cfg.GEMINI_MAX_RETRIES !== 'undefined') ? Number(cfg.GEMINI_MAX_RETRIES) : 2;
+  var baseRetryMs = (cfg && Number(cfg.GEMINI_RETRY_BASE_MS) > 0) ? Number(cfg.GEMINI_RETRY_BASE_MS) : 7000;
 
-  if (res.getResponseCode() !== 200) {
+  var res = null;
+  var lastErrMsg = '';
+  for (var attempt = 0; attempt <= maxRetries; attempt++) {
+    orqPaceGemini_(p, cfg, estTokens);
+    res = UrlFetchApp.fetch(url, {
+      method: 'post',
+      contentType: 'application/json',
+      headers: { 'x-goog-api-key': key },
+      payload: JSON.stringify({
+        contents: [{ parts: [{ text: prompt }] }],
+        generationConfig: { temperature: 0.1, responseMimeType: 'application/json', maxOutputTokens: 8192 }
+      }),
+      muteHttpExceptions: true
+    });
+
+    var code = res.getResponseCode();
+    if (code === 200) break;
+
     var body = {};
     try { body = JSON.parse(res.getContentText()); } catch(e) {}
-    throw new Error('Gemini HTTP ' + res.getResponseCode() + ': ' + String(body.error && body.error.message || '').slice(0, 140));
+    lastErrMsg = String(body.error && body.error.message || '').slice(0, 140);
+
+    if (code === 429 || /resource_exhausted|quota|rate.?limit/i.test(lastErrMsg)) {
+      var qClass = orqClassifyQuotaError_(code, lastErrMsg, null);
+      if (!qClass.retryableInTick || attempt >= maxRetries) {
+        var qErr = new Error('PAUSADO_CUOTA [' + qClass.type + ']: Gemini HTTP ' + code + ': ' + lastErrMsg);
+        qErr.isQuota = true;
+        qErr.quotaType = qClass.type;
+        qErr.httpStatus = code;
+        throw qErr;
+      }
+      var waitRetry = baseRetryMs * (attempt + 1);
+      if (typeof Utilities !== 'undefined' && typeof Utilities.sleep === 'function') {
+        Utilities.sleep(waitRetry);
+      }
+      p.setProperty('ORQ_GEMINI_LAST_CALL_MS', String(Date.now()));
+      continue;
+    }
+
+    throw new Error('Gemini HTTP ' + code + ': ' + lastErrMsg);
   }
 
   var data = JSON.parse(res.getContentText());
   var parts = (((data.candidates || [])[0] || {}).content || {}).parts || [];
   var parsed = typeof parseGeminiResponse === 'function' ?
-    parseGeminiResponse(parts.map(function(p){ return p.text || ''; }).join('')) : null;
+    parseGeminiResponse(parts.map(function(part){ return part.text || ''; }).join('')) : null;
 
   if (!Array.isArray(parsed)) throw new Error('Gemini no devolvió una lista JSON válida.');
   var byId = {};
-  parsed.forEach(function(item) { byId[item.id] = item; });
+  parsed.forEach(function(item) { if (item && item.id) byId[item.id] = item; });
   return byId;
 }
 
 function orqRecordFuente_(ss, res) {
   var sh = orqSheet_(ss, 'OrqFuentes');
-  sh.getRange(sh.getLastRow() + 1, 1, 1, 16).setValues([[
+  var rows = orqRows_(sh);
+  var targetRow = -1;
+  for (var i = rows.length - 1; i >= 0; i--) {
+    if (String(rows[i][0]) === String(res.runId) && String(rows[i][2]) === String(res.fuenteId)) {
+      targetRow = i + 2;
+      break;
+    }
+  }
+  var rowValues = [[
     res.runId, res.fecha, res.fuenteId, res.nombre, res.conector, res.estado,
     res.leidos, res.repetidos, res.clasificados, res.solicitudes, res.candidatos,
     res.errores, res.youtube, res.gemini, res.duracion, orqSafeText_(res.mensaje)
-  ]]);
+  ]];
+  if (targetRow >= 2) {
+    sh.getRange(targetRow, 1, 1, 16).setValues(rowValues);
+  } else {
+    sh.getRange(sh.getLastRow() + 1, 1, 1, 16).setValues(rowValues);
+  }
 }
 
 /** CONSULTA DE ESTADO COMPLETO PARA EL PANEL WEB */
@@ -1199,7 +1570,11 @@ function orqStatus() {
     estado: run.estado,
     id: run.id || '',
     inicio: run.inicio || '',
-    cursor: run.cursor || 0,
+    cursor: totals ? totals.completados : (run.cursor || 0),
+    completados: totals ? totals.completados : (run.completados || 0),
+    fallidos: totals ? totals.fallidos : (run.fallidos || 0),
+    pendientes: totals ? totals.pendientes : (run.pendientes || 0),
+    pausados: totals ? totals.pausados : (run.pausados || 0),
     total: run.total || 0,
     mensaje: run.mensaje || '',
     maxComments: run.maxComments || 15,
@@ -1225,6 +1600,8 @@ if (typeof module !== 'undefined') {
     orqStatus: orqStatus,
     orqSources_: orqSources_,
     orqTotals_: orqTotals_,
+    orqClassifyQuotaError_: orqClassifyQuotaError_,
+    orqPaceGemini_: orqPaceGemini_,
     orqSetSourceActive: orqSetSourceActive,
     orqSTAGING_ID: ORQ_STAGING_ID
   };
