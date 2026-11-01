@@ -1,0 +1,12 @@
+family_id,source_name,source_url,priority,source_kind,evidence_status,automation_status,next_action
+TUSCLASES_AR,Tusclases Argentina alumnos,https://www.tusclases.com.ar/buscar/alumnos.aspx,P0,demand,explicit_list_verified,official_alerts_manual_only,verify_unique_requests_and_contacts
+TUSCLASES_CO,Tusclases Colombia ciencias,https://www.tusclases.co/estudiantes/ciencias/,P1,demand,one_online_case_verified,manual_review_only,verify_eligibility_and_payment_from_argentina
+TEACHERON_GLOBAL,TeacherOn tutor jobs,https://www.teacheron.com/online-maths-tutor-jobs,P1,demand,public_jobs_verified,manual_review_and_free_leads_only,verify_credits_language_and_prices
+WORKANA_STEM,Workana tutor projects,https://www.workana.com/es/jobs?skills=tutoria,P1,project,stem_jobs_verified,search_alerts_manual_only,verify_current_jobs_application_cost
+REDDIT_UBA,Reddit UBA,https://www.reddit.com/r/UBA/,P1,community,historic_request_verified,authorized_search_manual_only,measure_last7d_requests
+REDDIT_EMPLEOS,Reddit empleos_AR,https://www.reddit.com/r/empleos_AR/,P1,community,historic_request_verified,authorized_search_manual_only,measure_last7d_requests
+BUSCATUCLASE_AR,BuscaTuClase alumnos,https://buscatuclase.com/ar/,P1,student_post_mechanism,official_feature_verified_no_recent_volume,manual_only,verify_live_list_and_permissions
+FACEBOOK_GROUPS,Facebook groups,https://www.facebook.com/groups/,P2,community,no_recent_demand_verified,manual_only_verify_group_rules,collect_evidence_without_private_data
+SUPERPROF_AR,Superprof Argentina,https://www.superprof.com.ar/,C,inbound_profiles,not_open_student_requests,own_profile_and_inbound_notifications_only,optimize_profile_separately
+TUSCLASES_AR_PROFILES,Tusclases Argentina teachers,https://www.tusclases.com.ar/,C,inbound_profiles,not_open_student_requests,own_profile_only,do_not_count_as_new_source
+YOUTUBE_EDUCATIONAL,YouTube educational comments,https://www.youtube.com/,D,educational_discussion,no_open_tutoring_demand_yield,do_not_scan_for_direct_leads,exclude_from_pilot
