@@ -249,6 +249,103 @@ function orqGetRun_() {
   try { return JSON.parse(raw); } catch(e) { return { id: '', estado: 'ERROR', cursor: 0, total: 0, inicio: '', mensaje: 'Estado corrupto.' }; }
 }
 
+/**
+ * Diagnóstico seguro del despliegue (v1): consulta exclusivamente configuración
+ * y estados agregados. No llama APIs externas, no muta planillas ni crea
+ * triggers. Nunca devuelve cuerpos de correos, comentarios o credenciales.
+ *
+ * Permite contrastar el ORQ_RUN de Script Properties con la cola y la fila
+ * de resumen sin confiar en porcentajes potencialmente obsoletos.
+ */
+function orqDiagnosticoSoloLectura() {
+  var ss = orqDb_();
+  var run = orqGetRun_();
+  var id = String(run.id || '');
+  var cola = ss.getSheetByName('OrqCola');
+  var fuenteLog = ss.getSheetByName('OrqFuentes');
+  var resumen = ss.getSheetByName('OrqCorridas');
+
+  var latestBySource = {};
+  if (fuenteLog && id) {
+    orqRows_(fuenteLog).forEach(function(row) {
+      if (String(row[0]) === id) latestBySource[String(row[2] || '')] = String(row[5] || '');
+    });
+  }
+
+  var count = {
+    trabajos: 0, completadosCola: 0, completadosVerificados: 0,
+    erroresCola: 0, pendientes: 0, enProceso: 0, pausados: 0,
+    recuperables: 0, omitidos: 0, inconsistencias: 0,
+    completadosConError: 0, completadosSinRegistro: 0
+  };
+  if (cola && id) {
+    orqRows_(cola).forEach(function(row) {
+      if (String(row[0]) !== id) return;
+      count.trabajos++;
+      var state = String(row[5] || '');
+      var last = latestBySource[String(row[2] || '')];
+      if (state === 'COMPLETADO') {
+        count.completadosCola++;
+        if (typeof last === 'undefined') {
+          count.inconsistencias++;
+          count.completadosSinRegistro++;
+        } else if (/^ERROR/i.test(last)) {
+          count.inconsistencias++;
+          count.completadosConError++;
+        } else if (last === 'PAUSADO_CUOTA' || last === 'PENDIENTE_REINTENTO' ||
+                   last === 'INCOMPLETO_RECUPERABLE' || /^OMITIDO/i.test(last)) {
+          count.inconsistencias++;
+        } else {
+          count.completadosVerificados++;
+        }
+      } else if (state === 'ERROR') {
+        count.erroresCola++;
+      } else if (state === 'PENDIENTE') {
+        count.pendientes++;
+      } else if (state === 'EN_PROCESO') {
+        count.enProceso++;
+      } else if (state === 'PAUSADO_CUOTA') {
+        count.pausados++;
+      } else if (state === 'INCOMPLETO_RECUPERABLE') {
+        count.recuperables++;
+      } else if (state === 'OMITIDO') {
+        count.omitidos++;
+      }
+    });
+  }
+
+  var sheetState = 'SIN_REGISTRO', sheetCompleted = null;
+  if (resumen && id) {
+    orqRows_(resumen).forEach(function(row) {
+      if (String(row[0]) === id) {
+        sheetState = String(row[3] || '');
+        sheetCompleted = Number(row[5]) || 0;
+      }
+    });
+  }
+
+  var triggerCount = 0;
+  if (typeof ScriptApp !== 'undefined' &&
+      typeof ScriptApp.getProjectTriggers === 'function') {
+    ScriptApp.getProjectTriggers().forEach(function(trigger) {
+      if (trigger.getHandlerFunction && trigger.getHandlerFunction() === 'orqTick') {
+        triggerCount++;
+      }
+    });
+  }
+
+  return {
+    versionDiagnostico: 'solo-lectura-v1',
+    sinEfectosLaterales: true,
+    estadoScriptProperties: String(run.estado || 'SIN_CORRIDAS'),
+    estadoResumen: sheetState,
+    completadosResumen: sheetCompleted,
+    triggersOrqTick: triggerCount,
+    cola: count,
+    aviso: 'Los registros pueden ser históricos; comparar HEAD y versión desplegada antes de editar o reanudar.'
+  };
+}
+
 function orqSaveRun_(run) {
   PropertiesService.getScriptProperties().setProperty('ORQ_RUN', JSON.stringify(run));
 }
