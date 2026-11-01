@@ -41,5 +41,12 @@
 6. Auditoría de secretos y privacidad. **No fusionar a `main` ni activar el motor** hasta resolver pruebas/seguridad.
 7. Mantener canal comercial manual: buscar solicitudes reales online, preparar anuncios de intensivos y después desarrollar videos cortos y blog, según `docs/ESTRATEGIA_CAPTACION.md`.
 
+
+### Hallazgo de seguridad documental (revisión parcial 2026-11-01)
+- Se buscaron patrones habituales de claves API/tokens en módulos principales, pruebas y documentos seleccionados; **no hubo coincidencias con los patrones revisados**, pero esto **no constituye una auditoría completa de secretos ni del historial de Git**.
+- El repositorio **público** contiene referencias explícitas a identificadores completos de recursos STAGING en `gas/Orquestador.js`, módulos piloto YouTube, tests y documentación histórica. Los IDs **no son credenciales**, pero facilitan identificar recursos internos y deben ser evaluados antes de compartir el repositorio como portfolio.
+- En `gas/Orquestador.js` el ID de STAGING cumple un rol de protección del entorno: **no eliminarlo ni reemplazarlo sin rediseñar la validación y correr pruebas**. Planificar migración segura a configuración privada, revisión de permisos de acceso y, si corresponde, saneamiento del historial.
+- La conectividad de GitHub **no permite modificar la visibilidad del repositorio desde esta sesión**. Si se busca privacidad inmediata, el propietario debe revisar en GitHub **Settings → General → Danger Zone → Change repository visibility**. Eliminar un ID de HEAD no lo borra del historial previo.
+
 ## 6. Límites de la transferencia entre IAs
 GitHub conserva código y decisiones **documentadas**, no el historial completo de ChatGPT, Gmail, mensajes internos ni estado actual de Google Sheets/Apps Script. Una IA sin conectores autorizados debe pedir acceso o un resumen redactado: no debe inventar datos ni repetir contactos.
