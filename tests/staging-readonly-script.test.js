@@ -21,7 +21,7 @@ test('auditoría de STAGING: solo se clonará el proyecto a carpeta temporal', (
 test('auditoría de STAGING: requiere consentimiento y comparación de version inmutable', () => {
   assert.match(src, /\[Parameter\(Mandatory = \$true\)\]/);
   assert.match(src, /\[int\]\$VersionNumber = 0/);
-  assert.match(src, /clasp clone/i);
+  assert.match(src, /\-claspArgs \@\('clone', \$ScriptId/);
   assert.match(src, /--compare-file \$reference/);
   assert.match(src, /Version inmutable NO comprobada/);
   assert.match(src, /No se modifico el proyecto remoto/);
