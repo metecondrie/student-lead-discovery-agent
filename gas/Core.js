@@ -1119,7 +1119,7 @@ function parseGeminiResponse(rawText) {
           else if (/abierto|comunidad|todos/i.test(rawDest)) dest = 'pedido_abierto';
           else if (/otro|tercero/i.test(rawDest)) dest = 'dirigido_a_otro_docente';
           else if (/ambiguo|dudoso/i.test(rawDest)) dest = 'ambiguo';
-          else dest = isSol ? 'pedido_abierto' : 'desconocido';
+          else dest = 'ambiguo';
         }
 
         var rawCont = String(obj.contactabilidad || '').toLowerCase().trim().replace(/[\s-]+/g, '_');
@@ -1128,7 +1128,7 @@ function parseGeminiResponse(rawText) {
           if (/ofrecido|voluntario|whatsapp|email|telefono/i.test(rawCont)) cont = 'contacto_ofrecido_voluntariamente';
           else if (/publico|canal_publico|abierto/i.test(rawCont)) cont = 'canal_publico_permitido';
           else if (/inexistente|cerrado|imposible/i.test(rawCont)) cont = 'via_inexistente';
-          else cont = isSol ? 'canal_publico_permitido' : 'no_verificada';
+          else cont = 'no_verificada';
         }
 
         var conf = typeof obj.confianza === 'number' ? Math.max(0, Math.min(1, obj.confianza)) : 0.5;
@@ -1137,8 +1137,9 @@ function parseGeminiResponse(rawText) {
         // NUNCA puede considerarse oportunidad comercial real para Alejo.
         var opComercial = typeof obj.oportunidad_comercial_alejo === 'boolean'
           ? obj.oportunidad_comercial_alejo
-          : (isSol && dest === 'pedido_abierto' && cont !== 'via_inexistente');
-        if (!isSol || dest === 'dirigido_al_creador' || dest === 'dirigido_a_otro_docente' || dest === 'ambiguo' || cont === 'via_inexistente') {
+          : false; // Nunca inventar oportunidad comercial ante respuesta incompleta.
+        if (!isSol || dest !== 'pedido_abierto' ||
+            (cont !== 'canal_publico_permitido' && cont !== 'contacto_ofrecido_voluntariamente')) {
           opComercial = false;
         }
 
