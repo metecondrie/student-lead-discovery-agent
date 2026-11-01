@@ -1578,14 +1578,12 @@ function orqGmailStableId_(item, msgId) {
     canonical.match(/tusclases\.com(?:\.[a-z]{2,})?\/[^#]*?[?&]id=(\d{5,})(?:[&#]|$)/i);
   if (tusMatch) return 'GMAIL-TUSCLASES-' + tusMatch[1];
 
-  var generic = typeof isGenericDashboardUrl === 'function' ?
-    isGenericDashboardUrl(canonical) : /\/(?:inbox|mensajes|panel|dashboard|tupantalla)(?:[?#]|\/?$)/i.test(canonical);
-  if (canonical && !generic && /^https?:\/\//i.test(canonical)) {
-    return 'GMAIL-' + orqHash_(String(it.source || 'gmail') + '|' + canonical);
-  }
-  // Nunca fusionar dos pedidos por compartir solo el nombre o el asunto.
+  // Otras plataformas pueden enviar el mismo enlace a un perfil o bandeja
+  // para alumnos DIFERENTES. Solo un ID de anuncio comprobable permite fusionar
+  // dos alertas. El nombre, asunto, URL de perfil o bandeja NO alcanzan.
   return 'GMAIL-' + orqHash_(String(it.source || 'gmail') + '|' +
-    String(it.msgId || msgId || '') + '|' + String(it.title || '').slice(0, 100));
+    String(it.msgId || msgId || it.threadId || '') + '|' +
+    String(it.title || '').slice(0, 100) + '|' + raw);
 }
 
 function orqExecuteGmail_(ss, run, source, jobCursor) {
