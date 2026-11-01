@@ -287,6 +287,8 @@ function orqTotals_(ss, runId) {
     pausados: 0,
     recuperables: 0,
     omitidos: 0,
+    completadosVerificados: 0,
+    discrepanciasEstado: 0,
     leidos: 0,
     repetidos: 0,
     clasificados: 0,
@@ -363,7 +365,19 @@ function orqTotals_(ss, runId) {
     orqRows_(ss.getSheetByName('OrqCola')).forEach(function(r) {
       if (String(r[0]) !== runId) return;
       var qState = String(r[5] || '');
-      if (qState === 'COMPLETADO') res.completados++;
+      if (qState === 'COMPLETADO') {
+        res.completados++;
+        // No considerar éxito si el último resultado registrado indica error,
+        // aun cuando una versión antigua dejó la cola en COMPLETADO.
+        var fRow = byFuente[String(r[2] || '')];
+        var fState = fRow ? String(fRow[5] || '') : '';
+        if (fRow && !/^ERROR/i.test(fState) &&
+            ['PAUSADO_CUOTA', 'PENDIENTE_REINTENTO', 'INCOMPLETO_RECUPERABLE', 'OMITIDO'].indexOf(fState) < 0) {
+          res.completadosVerificados++;
+        } else {
+          res.discrepanciasEstado++;
+        }
+      }
       else if (qState === 'ERROR') res.fallidos++;
       else if (qState === 'PAUSADO_CUOTA') res.pausados++;
       else if (qState === 'INCOMPLETO_RECUPERABLE') {
@@ -375,6 +389,7 @@ function orqTotals_(ss, runId) {
     });
   } else {
     res.completados = res.fuentes;
+    res.completadosVerificados = res.fuentes;
   }
 
   return res;
@@ -387,13 +402,13 @@ function orqUpdateRunRow_(ss, run) {
   }
   if (idx < 0) return;
   var t = orqTotals_(ss, run.id);
-  // 'Fuentes completas' es el número de trabajos COMPLETADO en OrqCola, no
-  // la cantidad de registros históricos OK en OrqFuentes (pueden quedar obsoletos).
+  // 'Fuentes completas' exige coincidencia entre la cola y el último
+  // resultado de OrqFuentes. Previene falsos COMPLETADO históricos.
   var finished = ['FINALIZADO', 'DETENIDO', 'ERROR', 'PAUSADO_CUOTA', 'INCOMPLETO_RECUPERABLE'].indexOf(run.estado) >= 0;
   var now = new Date();
   var secs = Math.round((now.getTime() - new Date(run.inicio).getTime()) / 100) / 10;
   sh.getRange(idx, 1, 1, 15).setValues([[
-    run.id, new Date(run.inicio), finished ? now : '', run.estado, run.total, t.completados,
+    run.id, new Date(run.inicio), finished ? now : '', run.estado, run.total, t.completadosVerificados,
     t.leidos, t.repetidos, t.clasificados, t.solicitudes, t.candidatos, t.errores,
     t.youtube, t.gemini, secs
   ]]);
