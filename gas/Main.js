@@ -708,7 +708,8 @@ function processGeminiQueue_(cfg, ctx, st, alerts, isSim) {
 }
 
 function ingestYouTubeComments_(cfg, ctx, st, alerts, isSim) {
-  if (!cfg.YOUTUBE_ACTIVO) return;
+  // La simulación es offline: no consultar YouTube ni gastar cuota oculta.
+  if (!cfg.YOUTUBE_ACTIVO || isSim) return;
   var p = props_();
   var apiKey = String(p.getProperty('YOUTUBE_API_KEY') || '').trim();
   if (!apiKey) {
