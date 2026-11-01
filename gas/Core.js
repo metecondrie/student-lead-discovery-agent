@@ -733,7 +733,19 @@ function usdReference(cfg, now) {
 
 function evaluate(it, cfg, now, index, contacted) {
   cfg = cfg || DEFAULT_CONFIG; index = index || {}; index.ids = index.ids || {}; index.keys = index.keys || {}; contacted = contacted || {};
-  var W = cfg.PESOS || DEFAULT_CONFIG.PESOS, n = norm(it.text), reasons = [], discard = '';
+  // Config en Sheets guarda PESOS como JSON: no usar strings como pesos (NaN).
+  var rawWeights = cfg.PESOS;
+  if (typeof rawWeights === 'string') {
+    try { rawWeights = JSON.parse(rawWeights); } catch (e) { rawWeights = null; }
+  }
+  if (!rawWeights || typeof rawWeights !== 'object' || Array.isArray(rawWeights)) rawWeights = {};
+  var W = {};
+  Object.keys(DEFAULT_CONFIG.PESOS).forEach(function(k) {
+    var v = Number(rawWeights[k]);
+    W[k] = (rawWeights[k] !== undefined && isFinite(v) && v >= 0) ?
+      v : DEFAULT_CONFIG.PESOS[k];
+  });
+  var n = norm(it.text), reasons = [], discard = '';
   var mainText = it.text ? String(it.text).split('\n[Materia video:')[0] : '';
   var subs = detectSubjects(it.kind === 'job' ? it.title : (mainText || it.text));
   if (!subs.length && !NOT_TAUGHT.test(norm(mainText))) subs = detectSubjects(it.kind === 'job' ? it.title : it.text);
