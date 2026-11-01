@@ -1698,3 +1698,163 @@ test('regresión seguridad: nueva corrida no puede sobrescribir ORQ_RUN pausada 
   assert.equal(JSON.parse(env.props.ORQ_RUN).id, state.id);
   assert.equal(env.sheets.OrqCola.rows.length, queueBefore);
 });
+
+
+/* === Entrada manual de avisos públicos (sin scraping, STAGING) === */
+function manualFixture_(env, entries, enabled = true) {
+  env.sheets.Fuentes.rows.push([
+    'MAN-01','Solicitudes verificadas','Avisos manuales de demanda',
+    'Matemática; Física; Química; Biología','Universidad / Online',
+    'https://www.tusclases.com.ar/buscar/alumnos.aspx','',enabled,
+    'revision_manual','P0','DISPONIBLE','solicitudes_verificadas','SOLO_REVISION'
+  ]);
+  const sh = env.ctx.SpreadsheetApp.openById(STAGING).insertSheet('Piloto_Demanda_20261101');
+  sh.rows.push([
+    'ID aviso','País','Fuente','URL pública','Materia','Fecha visible',
+    'Modalidad en ficha','Estado piloto','Historial verificado','Motivo/acción','Método'
+  ]);
+  for (const row of entries) {
+    sh.rows.push(row);
+  }
+  return sh;
+}
+
+function manualRow_(id, country = 'Chile', status = 'PENDIENTE_ELEGIBILIDAD',
+  date = new Date().toISOString().slice(0, 10), mode = 'Online', url = '') {
+  const host = country === 'Colombia' ? 'www.tusclases.co' : 'www.tusclasesparticulares.cl';
+  return [
+    id,country,'Tusclases alumnos',url || ('https://' + host + '/estudiantes/matematicas/solicitud-ficticia-' + id + '.aspx'),
+    'Matemática online',date,mode,status,
+    'Sin verificación de mensajería interna','Comprobar residencia y cobro','Revisión humana'
+  ];
+}
+
+test('entrada manual: previsualiza 8 filas, selecciona 4 y no escribe ni consume API', () => {
+  const env = createMockEnv();
+  const today = new Date().toISOString().slice(0, 10);
+  manualFixture_(env, [
+    manualRow_('9990011'), manualRow_('9990012'), manualRow_('9990013'),
+    manualRow_('9990014'), manualRow_('9990015', 'Chile', 'EXCLUIDO_CONTACTADO'),
+    manualRow_('9990016', 'Chile', 'EXCLUIDO_CONTACTADO'),
+    manualRow_('9990017', 'Chile', 'EXCLUIDO_CONTACTADO'),
+    manualRow_('9990018', 'Chile', 'VERIFICAR_FECHA', 'SIN_FECHA_FICHA')
+  ], false);
+  const snapshot = JSON.stringify(Object.fromEntries(
+    Object.entries(env.sheets).map(([name, sh]) => [name, sh.rows])
+  ));
+  const preview = env.ctx.orqPreviewSolicitudesVerificadas();
+  assert.equal(preview.modo, 'SOLO_LECTURA');
+  assert.equal(preview.estado, 'SIN_EJECUTAR');
+  assert.equal(preview.examinados, 8);
+  assert.equal(preview.preseleccionados, 4);
+  assert.equal(preview.omitidosEstado, 4);
+  assert.equal(preview.contactoVerificado, false);
+  assert.equal(preview.elegibilidadVerificada, false);
+  assert.deepEqual(Array.from(preview.ids), ['9990011','9990012','9990013','9990014']);
+  assert.equal(JSON.stringify(Object.fromEntries(
+    Object.entries(env.sheets).map(([name, sh]) => [name, sh.rows])
+  )), snapshot, 'la previsualización es de solo lectura');
+  assert.equal(env.httpRequests.length, 0);
+  assert.equal(env.triggers.length, 0);
+  assert.throws(() => env.ctx.orqStart(['MAN-01'], 5), /SIN_FUENTES_HABILITADAS/,
+    'una fuente manual apagada nunca inicia búsquedas');
+});
+
+test('entrada manual: 2 solicitudes elegibles para clasificar; una contactada bloqueada por CRM', () => {
+  const env = createMockEnv();
+  manualFixture_(env, [
+    manualRow_('9990011'),
+    manualRow_('9990012', 'Colombia'),
+    manualRow_('9990013', 'Chile','EXCLUIDO_CONTACTADO'),
+    manualRow_('9990014', 'Chile','VERIFICAR_FECHA','SIN_FECHA_FICHA')
+  ]);
+  const shContacts = env.ctx.SpreadsheetApp.openById(STAGING).insertSheet('Contactados');
+  shContacts.rows.push(['Nombre','Materia','URL','Fecha','Nota']);
+  shContacts.rows.push(['Reservado','Matemática',
+    'https://www.tusclases.co/estudiantes/matematicas/pedido-ficticio-9990012','', '']);
+  const report = env.ctx.orqStart(['MAN-01'], 5);
+  assert.equal(report.estado, 'FINALIZADO');
+  assert.equal(report.metricas.candidatos, 1, 'solo candidato pendiente de revisión');
+  assert.equal(report.metricas.solicitudes, 1);
+  assert.equal(report.metricas.repetidos, 1, 'el contacto CRM ya realizado se excluye');
+  assert.equal(env.stats.gem, 1, 'un lote Gemini y no uno por anuncio');
+  const found = env.sheets.OrqHallazgos.rows.slice(1);
+  assert.equal(found.length, 1);
+  assert.equal(found[0][4], 'GMAIL-TUSCLASES-9990011');
+  assert.equal(found[0][11], 'VERIFICAR_CONTACTO');
+  assert.equal(found[0][10], 'no_verificada', 'no atribuir consentimiento por respuesta de Gemini');
+  assert.match(String(found[0][15]), /ELEGIBILIDAD\/COBRO Y MENSAJERÍA INTERNA NO VERIFICADOS/);
+  assert.equal(env.httpRequests.filter(x => /tusclases/i.test(x.url)).length, 0,
+    'no hay scraping: el conector solo consulta Google Sheets, CRM y Gemini');
+  assert.equal(env.triggers.length, 0);
+
+  env.ctx.orqStart(['MAN-01'], 5);
+  assert.equal(env.sheets.OrqHallazgos.rows.length, 2,
+    'no duplica solicitudes entre corridas');
+  assert.equal(env.stats.gem, 1, 'no consume Gemini al repetir anuncios vistos');
+});
+
+test('entrada manual: URLs falsas, ids inconsistentes, fechas antiguas y presencialidad se excluyen', () => {
+  const env = createMockEnv();
+  manualFixture_(env, [
+    manualRow_('9990011','Chile','PENDIENTE_ELEGIBILIDAD',new Date().toISOString().slice(0,10),
+      'Online','https://www.tusclasesparticulares.cl.evil.example/solicitud-9990011.aspx'),
+    manualRow_('9990012','Chile','PENDIENTE_ELEGIBILIDAD',new Date().toISOString().slice(0,10),
+      'Online','https://www.tusclasesparticulares.cl/solicitud-9999999.aspx'),
+    manualRow_('9990013','Chile','PENDIENTE_ELEGIBILIDAD','2024-01-01'),
+    manualRow_('9990014','Chile','PENDIENTE_ELEGIBILIDAD','SIN_FECHA_FICHA'),
+    manualRow_('9990015','Chile','PENDIENTE_ELEGIBILIDAD',new Date().toISOString().slice(0,10),'Presencial')
+  ]);
+  const preview = env.ctx.orqPreviewSolicitudesVerificadas();
+  assert.equal(preview.examinados, 5);
+  assert.equal(preview.preseleccionados, 0);
+  assert.equal(preview.invalidos, 2);
+  assert.equal(preview.sinFechaOAntiguos, 2);
+  assert.equal(preview.noOnline, 1);
+  env.ctx.orqStart(['MAN-01'],5);
+  assert.equal(env.ctx.orqStatus().metricas.candidatos, 0);
+  assert.equal(env.stats.gem, 0);
+  assert.equal(env.sheets.OrqHallazgos.rows.length, 1);
+});
+
+test('entrada manual: ante fallo Gemini se conserva ERROR sin inventar oportunidades', () => {
+  const env = createMockEnv({failGeminiServer:true});
+  manualFixture_(env,[manualRow_('9990011')]);
+  env.ctx.orqStart(['MAN-01'],5);
+  assert.equal(env.sheets.OrqCola.rows[1][5], 'ERROR');
+  assert.equal(env.sheets.OrqHallazgos.rows.length,1);
+  assert.equal(env.ctx.orqStatus().metricas.candidatos, 0);
+  assert.match(String(env.sheets.OrqFuentes.rows[1][15]),/ERROR_GEMINI/);
+});
+
+test('entrada manual: deduplicación entre Gmail y el tablón de Chile/Colombia', () => {
+  const env = createMockEnv();
+  const co = 'https://www.tusclases.co/estudiantes/quimica/bogota/solicitud-9990011';
+  const cl = 'https://www.tusclasesparticulares.cl/estudiantes/matematicas/pedido-9990012.aspx';
+  assert.equal(env.ctx.orqManualAdId_(co), '9990011');
+  assert.equal(env.ctx.orqManualAdId_(cl), '9990012');
+  assert.equal(env.ctx.orqGmailStableId_({url:co,source:'tusclases'}, 'msg1'), 'GMAIL-TUSCLASES-9990011');
+  assert.deepEqual(Array.from(env.ctx.orqTusclasesIds_(cl)), ['9990012']);
+  assert.deepEqual(Array.from(env.ctx.orqTusclasesIds_(co)), ['9990011']);
+  const sh = env.ctx.SpreadsheetApp.openById(STAGING).insertSheet('OrqHallazgos');
+  sh.rows.push(Array.from({length:16},(_,i)=>'col'+i));
+  sh.rows.push(['RUN-PREV',new Date(),'Gmail','Tusclases', 'GMAIL-TUSCLASES-9990011',
+    co,new Date(),'resumen','TRUE','pedido_abierto','no_verificada','VERIFICAR_CONTACTO',
+    'Química','Universitario',0.9,'pendiente']);
+  manualFixture_(env,[manualRow_('9990011','Colombia','PENDIENTE_ELEGIBILIDAD',
+    new Date().toISOString().slice(0,10),'Online',co)]);
+  env.ctx.orqStart(['MAN-01'],5);
+  assert.equal(env.ctx.orqStatus().metricas.candidatos,0);
+  assert.equal(env.stats.gem,0);
+  assert.equal(env.sheets.OrqHallazgos.rows.length,2);
+});
+
+test('entrada manual: encabezados incompatibles no se aceptan silenciosamente', () => {
+  const env = createMockEnv();
+  const sh = manualFixture_(env,[manualRow_('9990011')]);
+  sh.rows[0][0] = 'Nombre de estudiante';
+  assert.throws(()=>env.ctx.orqPreviewSolicitudesVerificadas(),/Cabecera incompatible/);
+  env.ctx.orqStart(['MAN-01'], 5);
+  assert.equal(env.ctx.orqStatus().fallidos,1);
+  assert.equal(env.sheets.OrqHallazgos.rows.length,1);
+});
