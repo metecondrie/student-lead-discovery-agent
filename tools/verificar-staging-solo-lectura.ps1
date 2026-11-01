@@ -13,7 +13,7 @@ param(
   [ValidateNotNullOrEmpty()]
   [string]$ScriptId,
 
-  [ValidateRange(1, 2147483647)]
+  [ValidateRange(0, 2147483647)]
   [int]$VersionNumber = 0,
 
   [switch]$KeepTemp
@@ -42,12 +42,12 @@ $headFolder = Join-Path $tempRoot 'HEAD'
 $versionFolder = Join-Path $tempRoot 'VERSION'
 New-Item -ItemType Directory -Path $headFolder -Force | Out-Null
 
-function Read-Clone([string]$workFolder, [string[]]$args) {
+function Read-Clone([string]$workFolder, [string[]]$claspArgs) {
   Push-Location $workFolder
   try {
     # Solo CLONE: una descarga de codigo en el directorio temporal privado.
     # No mostrar los logs de clasp porque pueden contener identificadores.
-    $null = & clasp @args 2>&1
+    $null = & clasp @claspArgs 2>&1
     if ($LASTEXITCODE -ne 0) {
       throw 'No fue posible leer el proyecto con clasp; revisar autenticacion y permisos.'
     }
@@ -63,7 +63,7 @@ function Read-Clone([string]$workFolder, [string[]]$args) {
 try {
   Write-Output 'AUDITORIA STAGING - SOLO LECTURA'
   Write-Output '1) Comparando HEAD remoto con Orquestador.js del checkout de GitHub...'
-  $headFile = Read-Clone $headFolder @('clone', $ScriptId)
+  $headFile = Read-Clone -workFolder $headFolder -claspArgs @('clone', $ScriptId)
   & node $auditor --file $headFile --compare-file $reference
   if ($LASTEXITCODE -ne 0) {
     throw 'La comparacion de HEAD no pudo completarse.'
@@ -72,7 +72,7 @@ try {
   if ($VersionNumber -gt 0) {
     New-Item -ItemType Directory -Path $versionFolder -Force | Out-Null
     Write-Output ('2) Comparando VERSION INMUTABLE numero ' + $VersionNumber + ' con GitHub...')
-    $versionFile = Read-Clone $versionFolder @('clone', $ScriptId, [string]$VersionNumber)
+    $versionFile = Read-Clone -workFolder $versionFolder -claspArgs @('clone', $ScriptId, [string]$VersionNumber)
     & node $auditor --file $versionFile --compare-file $reference
     if ($LASTEXITCODE -ne 0) {
       throw 'La comparacion de version inmutable no pudo completarse.'
