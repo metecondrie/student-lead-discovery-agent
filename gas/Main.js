@@ -682,9 +682,9 @@ function processGeminiQueue_(cfg, ctx, st, alerts, isSim) {
       } else if (r.contactabilidad === 'via_inexistente') {
         // Dimensión 3: Sin vía de contacto viable o permitida
         statusText = 'Rechazado: sin vía de contacto (' + (r.resumen || 'canal no disponible') + ')';
-      } else if (r.destinatario === 'ambiguo' || r.contactabilidad === 'no_verificada') {
+      } else if (r.destinatario === 'ambiguo' || r.destinatario === 'desconocido' || r.contactabilidad === 'no_verificada') {
         // Dimensión 2 & 3: Ambiguo o vía no verificada -> REVISIÓN MANUAL (sin alta comercial automática)
-        var motivoManual = r.destinatario === 'ambiguo' ? 'destinatario ambiguo' : 'canal no verificado';
+        var motivoManual = (r.destinatario === 'ambiguo' || r.destinatario === 'desconocido') ? 'destinatario no comprobado' : 'canal no verificado';
         statusText = 'Revisión manual: ' + motivoManual + ' (' + (r.resumen || '') + ')';
       } else if (r.confianza < 0.7) {
         // Confianza baja -> REVISIÓN MANUAL
@@ -752,10 +752,8 @@ function ingestYouTubeComments_(cfg, ctx, st, alerts, isSim) {
     log_('WARN', 'youtube_fuentes', 'No se pudo leer hoja Fuentes: ' + e.message);
   }
 
-  if (!targetSources.length && typeof EDUCATIONAL_SOURCES !== 'undefined') {
-    targetSources = EDUCATIONAL_SOURCES.filter(function (s) { return s.active && s.resourceId; });
-  }
-
+  // Desactivar todas las fuentes en la hoja DEBE detener la ingesta.
+  // No reactivar silenciosamente fuentes embebidas del motor antiguo.
   targetSources.forEach(function (src) {
     var pageToken = '';
     var pageCount = 0;
