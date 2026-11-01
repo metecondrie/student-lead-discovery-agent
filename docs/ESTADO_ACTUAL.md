@@ -10,6 +10,14 @@
 - **Piloto comercial propuesto:** [cuatro fuentes automáticas y vías de captación manual](https://github.com/metecondrie/student-lead-discovery-agent/blob/fix/gmail-diagnostico-y-piloto-20261101/docs/PILOTO_COMERCIAL_2026-11-01.md). No se modificaron fuentes ni triggers de STAGING y **no se desplegó el PR**.
 - **Siguiente paso imprescindible:** identificar la versión real del despliegue, examinar la corrida sin sobrescribirla y reproducir `th.getMessages is not a function`; verificar que la corrección resuelva la causa antes de fusionar o desplegar.
 
+## Actualización técnica — causas raíz y herramientas de diagnóstico (2026-11-01)
+
+- **Causas históricas verificadas en código:** `feature/orquestador-multifuente` persistía objetos `GmailThread` en `run._gmailCache` (pierden `getMessages()` tras JSON) y etiquetaba `COMPLETADO` incondicionalmente al volver de conectores que registraban errores. **No está verificado que esa rama fuera la versión ejecutada en STAGING**.
+- **Diagnóstico agregado seguro:** `orqDiagnosticoSoloLectura()` en el PR; muestra discrepancias entre cola, resultados, resumen, `ORQ_RUN` y recuento de triggers, sin ejecutar conectores ni mostrar datos de estudiantes.
+- **Auditoría offline:** `tools/auditar-deploy-local.cjs` compara patrones y hashes SHA-256 del archivo Apps Script clonado o de la respuesta privada de `projects.getContent(versionNumber=N)`, con tests. Ver [guía de verificación](VERIFICAR_DESPLIEGUE_APPS_SCRIPT_2026-11-01.md).
+- **Deduplicación real:** Gmail usa ID canónico del anuncio Tusclases y un índice local para no procesar dos correos con diferentes enlaces de seguimiento como dos leads; pruebas con mismo aviso, distinto aviso y enlace genérico.
+- **CI de PR:** pruebas de regresión automáticas aprobadas en commit `f25c1501907c05a9be11c108adf3b3158f0cd7d6` (posteriores a las pruebas de métricas, Gmail y diagnóstico). CI no equivale a desplegado.
+
 ## 1. Dónde está cada cosa
 - **GitHub:** repositorio `metecondrie/student-lead-discovery-agent`, **público** al momento de la verificación. El README anterior de `main` decía «privado»; esa frase era incorrecta.
 - **`main`:** solo documentación y configuración de ejemplo, **no** el código operativo del orquestador.
