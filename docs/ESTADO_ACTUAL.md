@@ -75,3 +75,13 @@ GitHub conserva código y decisiones **documentadas**, no el historial completo 
 - CI ahora impide volver a introducir ambos patrones antiguos (`tests/deployment-regression-guard.test.js`).
 - **Sin despliegue en Apps Script ni modificaciones en Sheets:** no se pudieron consultar los contenidos de HEAD ni la versión inmutable desplegada con las conexiones disponibles. Seguir [guía de comparación](VERIFICAR_DESPLIEGUE_APPS_SCRIPT_2026-11-01.md), con acceso autorizado a la API Apps Script y sin divulgar el código/versiones privados.
 - Próximo paso seguro: obtener solo lectura de HEAD y la versión activa, comparar hashes y patrones, y recién después evaluar integración/despliegue del PR. No iniciar una nueva corrida ni contactar alumnos automáticamente.
+
+## Etapa 4 — protección contra mensajes duplicados (2026-11-01)
+
+- **Auditoría privada agregada:** 10 contactos en `Contactados`, 11 comprobantes de Tusclases en Gmail (uno nuevo del 2026-11-01 no reflejado en la planilla; una confirmación sin ID legible). Ver [informe sin PII](AUDITORIA_CONTACTOS_2026-11-01.md).
+- **Código propuesto en PR #12:** índices efímeros de contactos de Gmail Recibidos/Enviados + pestaña `Contactados`; enlaces directos y `awstrack.me/L0/` decodificados sin visitar URLs; contactos confirmados excluidos **antes** de Gemini. Sin coincidencia: `VERIFICAR_CONTACTO`, **no «libre para escribir»**.
+- **Panel mejorado:** botón «Comprobar contactos», solo lectura, con totales agregados; mostrar el estado pendiente de cada candidato y mensajería interna no verificada.
+- **Piloto operativo preparado:** interfaz sin modo `ALL_ENABLED` por defecto; selección explícita de las cuatro fuentes con `orqPreviewPilotoComercial()` y confirmación antes de iniciar. No se inició ninguna corrida.
+- **Pruebas:** casos sintéticos cubren CRM, comprobantes, seguimiento codificado, errores de Gmail, no duplicación, privacidad y modo piloto seguro. Verificar CI del último commit de la rama.
+- **Bloqueante:** estas funcionalidades no están instaladas en STAGING. Primero comprobar HEAD, deployment y triggers con acceso autorizado a Apps Script; [guía](VERIFICAR_DESPLIEGUE_APPS_SCRIPT_2026-11-01.md).
+
