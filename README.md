@@ -1,49 +1,38 @@
-# Student Lead Discovery Agent
+# Student Lead Discovery Agent — rama de desarrollo del orquestador
 
-**Prototipo en auditoría; no desplegado.** Sistema de descubrimiento de solicitudes de clases particulares con supervisión humana, desarrollado con Google Apps Script, Gmail, Sheets, YouTube Data API y Gemini.
+**Fecha de corte:** 2026-11-01. Prototipo con código, panel de Apps Script y pruebas Node. **Repositorio público**; datos personales y credenciales prohibidos.
 
-## Arquitectura
 
-```mermaid
-flowchart TD
-  A[Gmail / RSS / YouTube] --> B[Normalización y deduplicación]
-  B --> C[Cola persistente Gemini Flash-Lite]
-  C --> D{Solicita clases y hay vía de contacto?}
-  D -->|Sí| E[Google Sheets: oportunidades]
-  D -->|No| F[Descartar o revisar]
-  E --> G[Notificación privada al profesor]
-  G --> H[Revisión y contacto manual]
-```
+## Auditoría de fuentes y acciones prioritarias (2026-11-01)
 
-## Implementado en esta rama
+- [Inventario de las 77 fuentes activas y diagnóstico del embudo](docs/AUDITORIA_FUENTES_2026-11-01.md).
+- [Issue #11: reparar Gmail, priorizar fuentes con pedidos abiertos y reconciliar métricas](https://github.com/metecondrie/student-lead-discovery-agent/issues/11).
 
-- Extracción de avisos de Tusclases y alertas de Gmail; deduplicación de enlaces de seguimiento.
-- Filtros de avisos administrativos de Superprof y ruido de foros.
-- Conector YouTube basado en su API oficial, con límites locales de consulta.
-- Catálogo de **239 fuentes candidatas, desactivadas**; no equivale a 239 rastreadores operativos.
-- Clasificador `gemini-3.5-flash-lite` con cola persistente, límites configurables y conexión con el alta de oportunidades.
-- Evaluación de contactabilidad en YouTube, Instagram, TikTok y otras fuentes. No hay conectores automáticos para todas esas redes.
-- Mensajes sugeridos con precios ARS, equivalentes USD orientativos (si hay cotización vigente) y referencias opcionales a perfiles docentes.
-- Sin envío automático a alumnos y con interruptor de sistema apagado por defecto.
 
-## Pruebas
+## Retomar sin perder contexto
+1. [AGENTS.md](AGENTS.md) — normas para cualquier IA.
+2. [Estado actual](docs/ESTADO_ACTUAL.md) — fotografía de GitHub, Gmail/Sheets y STAGING, límites de verificación.
+3. [Estrategia de captación](docs/ESTRATEGIA_CAPTACION.md).
+4. [Roadmap](docs/ROADMAP.md), [seguridad](SECURITY.md) y documentación técnica de esta rama.
 
-```bash
-npm test
-```
+**Rama:** `fix/orquestador-cuota-gmail-progreso-20261101`. Último commit de código documentado: `5d33e1510628a3ed0c2e2d87df38c6b30bcaa97f`. Revisar si hubo nuevos commits antes de intervenir; no usar `main` como si contuviera el código.
 
-**90 pruebas locales aprobadas** (sin conexión real a Google ni entrega de mensajes). GitHub Actions ejecuta la suite al actualizar esta rama.
+## Arquitectura general
+`gas/Core.js` (normalización, filtros, deduplicación, clasificación), `gas/Main.js` (Gmail/Sheets, funciones auxiliares), `gas/Catalogo.js` (catálogo de fuentes), `gas/Orquestador.js` (corridas, cuotas, cola y continuación), `gas/PanelOrquestador.html` (interfaz), módulos de YouTube y `tests/`.
+
+Conectores investigados/implementados en distinto grado: alertas Gmail, RSS públicos, YouTube API y Gemini; **239 fuentes del catálogo no equivalen a 239 fuentes operativas**. Instagram, TikTok y redes restringidas no son conectores de rastreo automático habilitados.
+
+## Evidencia y límites
+- Commits recientes de cuota/reintento HTTP 429, persistencia del cursor, recuperación de trabajos y protección de corridas pausadas.
+- El README previo declaraba 90 pruebas locales simuladas aprobadas. No se volvieron a correr en la preparación de esta documentación: ejecutar `npm test` y comprobar CI en el commit actual.
+- Existe una planilla STAGING con estados de orquestación. Una corrida antigua consta como `EJECUTANDO`, pero no se verificó en vivo su trigger; **no iniciar una corrida nueva sobre la existente sin inspección y autorización**.
+- Una sesión de despliegue STAGING reportó actualización a versión 2, pero no hay comprobación aquí de que el `/exec` operativo corresponda a este código de GitHub. No afirmar producción validada.
+- Estado del motor antiguo: `SISTEMA_ACTIVO = FALSE` en Sheets al 2026-11-01.
+- Se encontraron duplicados de un aviso Tusclases y falso positivo administrativo Superprof en el motor anterior; falta validar la corrección end-to-end.
+- La regla de contacto previo está en [AGENTS.md](AGENTS.md): comprobar Gmail Enviados, confirmaciones recibidas y `Contactados` antes de sugerir un nuevo mensaje.
 
 ## Seguridad
+Sin envío automático a terceros, sin publicación automatizada ni manipulación de credenciales. No subir exportaciones de Gmail/Sheets, listas de alumnos, información de menores ni datos privados. Validar cambios sobre copia/STAGING únicamente con permiso. Mantener `main` sin código no verificado hasta la auditoría de integración.
 
-Las claves se guardan en Script Properties, nunca en GitHub ni en celdas accesibles. Para activar cualquier conexión se requiere configuración personal y evaluación de los términos de cada fuente. **No ejecutar `instalar()` directamente en la cuenta operativa sin probar primero sobre una copia**.
-
-## Estado
-
-La rama `develop/antigravity-2026-10-30` es una versión candidata. Falta confirmar las APIs reales, probar la migración de datos en Sheets y validar resultados en piloto antes de publicarla como portfolio.
-
-Ver [detalles de integración](docs/INTEGRATION.md), [seguridad](SECURITY.md) y [pendientes](docs/STATUS.md).
-
-### English summary
-
-Human-in-the-loop tutoring lead discovery prototype using Google Apps Script, Gemini, YouTube Data API, Gmail and Sheets. Uses authorized data sources, persistent deduplication, semantic intent classification, contactability assessment and owner-only alerts. Development build; not production-ready.
+## Pruebas locales
+`npm test` (comprobar dependencias según `package.json`). Los tests simulados no acreditan funcionamiento real de Gmail/Gemini/YouTube; comprobar permisos/cuotas y ensayos puntuales con autorización.

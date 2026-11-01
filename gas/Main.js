@@ -552,8 +552,13 @@ function recordYouTubeQuota_(p, count) {
   p.setProperty('YT_QUOTA_USED', String(used + count));
 }
 
+// La API Gemini reinicia las cuotas RPD a medianoche del Pacífico, no en Argentina.
+function geminiQuotaDayKey_(d) {
+  return Utilities.formatDate(d, 'America/Los_Angeles', 'yyyy-MM-dd');
+}
+
 function checkGeminiQuota_(p, cfg) {
-  var today = dayKey_(new Date());
+  var today = geminiQuotaDayKey_(new Date());
   var day = p.getProperty('GEMINI_CALLS_DAY');
   var count = (day === today) ? Number(p.getProperty('GEMINI_CALLS_COUNT') || 0) : 0;
   var maxCalls = Number(cfg.GEMINI_MAX_DAILY_CALLS || 20);
@@ -561,7 +566,7 @@ function checkGeminiQuota_(p, cfg) {
 }
 
 function recordGeminiCall_(p) {
-  var today = dayKey_(new Date());
+  var today = geminiQuotaDayKey_(new Date());
   var day = p.getProperty('GEMINI_CALLS_DAY');
   var count = (day === today) ? Number(p.getProperty('GEMINI_CALLS_COUNT') || 0) : 0;
   p.setProperty('GEMINI_CALLS_DAY', today);
