@@ -799,6 +799,27 @@ test('diagnóstico de contactos: fallo de Gmail exige etiqueta incompleta y cons
   assert.equal(report.fuentesConsultadas.gmailEnviados, false);
 });
 
+
+test('búsqueda Tusclases: una fuente de Química no excluye una alerta con alumno de Matemática', () => {
+  const env = createMockEnv();
+  addGmailFixture_(env, 'GM-MATERIAS');
+  const row = env.sheets.Fuentes.rows.find(r => r[0] === 'GM-MATERIAS');
+  row[3] = 'Química; Física; Matemática; Biología';
+  let query = '';
+  const search = env.ctx.GmailApp.search;
+  env.ctx.GmailApp.search = q => {
+    if (/^newer_than:7d/.test(q)) query = q;
+    return search(q);
+  };
+  env.ctx.orqStart(['GM-MATERIAS'], 10);
+  assert.match(query, /from:\(tusclases\.com\.ar/);
+  assert.match(query, /-subject:"Mensaje desde tusclases\.com\.ar"/);
+  assert.doesNotMatch(query, /\bQuímica\b|\bFísica\b|\bMatemática\b|\bBiología\b/,
+    'los filtros por materia producen falsos negativos en boletines mixtos');
+  assert.equal(env.ctx.orqStatus().estado, 'FINALIZADO');
+  assert.ok(env.sheets.OrqHallazgos.rows.slice(1).some(r => r[2] === 'Gmail'));
+});
+
 test('control previo: identifica anuncios de Tusclases en enlaces directos y tracking codificado sin navegar', () => {
   const env = createMockEnv();
   const url = 'https://www.tusclases.com.ar/estudiante-matematica/pedido-2466634.aspx?utm_source=mail';
