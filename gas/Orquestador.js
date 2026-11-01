@@ -254,7 +254,8 @@ function orqSeen_(ss) {
 function orqTotals_(ss, runId) {
   var res = { fuentes: 0, leidos: 0, repetidos: 0, clasificados: 0, solicitudes: 0, candidatos: 0, errores: 0, youtube: 0, gemini: 0, detalles: [] };
   orqRows_(orqSheet_(ss, 'OrqFuentes')).forEach(function(r) {
-    if (String(r[0]) !== runId) return;
+    // Las pausas por cuota son intentos, no fuentes procesadas ni errores definitivos.
+    if (String(r[0]) !== runId || String(r[5]) === 'PAUSADO_CUOTA') return;
     res.fuentes++;
     res.leidos += Number(r[6]) || 0;
     res.repetidos += Number(r[7]) || 0;
@@ -438,9 +439,9 @@ function orqTick() {
       var gcap = typeof checkGeminiQuota_ === 'function' ?
         checkGeminiQuota_(p, { GEMINI_MAX_DAILY_CALLS: Number(cfg.GEMINI_MAX_DAILY_CALLS) || 20 }) : { allowed: true, count: 0, max: 20 };
       var quotaReset = gcap.allowed && (gcap.count === 0 || (gcap.max - (gcap.count || 0)) >= 1);
-      var timeReached = resumeAt > 0 && nowMs >= resumeAt;
-
-      if (quotaReset || timeReached) {
+      // El vencimiento del temporizador no restablece una cuota agotada.
+      // Solo continuar cuando el contador real permita nuevas llamadas.
+      if (quotaReset) {
         run.estado = 'EJECUTANDO';
         run.mensaje = 'Cuota restablecida. Reanudando búsqueda multifuente...';
         delete run.proximaReanudacion;
@@ -458,7 +459,7 @@ function orqTick() {
         orqUpdateRunRow_(ss, run);
       } else {
         // Aún no es seguro reanudar; mantener trigger programado
-        var waitTarget = new Date(resumeAt > 0 ? resumeAt : (nowMs + 3600000));
+        var waitTarget = new Date(Math.max(nowMs + 3600000, resumeAt || 0));
         orqScheduleAt_(waitTarget);
         return;
       }
@@ -587,9 +588,10 @@ function orqTick() {
     }
 
     // Contar progreso
-    var doneCount = colaRows.filter(function(r) {
+    // Releer la cola actualizada: PAUSADO_CUOTA no cuenta como trabajo terminado.
+    var doneCount = orqRows_(shCola).filter(function(r) {
       return String(r[0]) === run.id && ['COMPLETADO', 'ERROR', 'OMITIDO'].indexOf(String(r[5])) >= 0;
-    }).length + 1;
+    }).length;
     run.cursor = doneCount;
     if (run.estado === 'EJECUTANDO') {
       run.mensaje = 'Fuente procesada: ' + source.name + ' (' + result.estado + ')';
@@ -946,13 +948,10 @@ function orqExecuteGmail_(ss, run, source) {
       query += 'from:(tusclases.com.ar OR superprof.com.ar OR alert-noreply@google.com)';
     }
 
-    // Cachear hilos de Gmail en memoria del run para no re-consultar la misma query 20 veces
-    run._gmailCache = run._gmailCache || {};
-    var threads = run._gmailCache[query];
-    if (!threads) {
-      threads = typeof GmailApp !== 'undefined' ? GmailApp.search(query, 0, 15) : [];
-      run._gmailCache[query] = threads;
-    }
+    // GmailThread es un objeto de servicio: al persistir ORQ_RUN como JSON pierde
+    // getMessages()/getId(). No cachearlo en el estado serializado entre triggers.
+    // Reconsultar una búsqueda acotada y deduplicar resultados en la planilla.
+    var threads = typeof GmailApp !== 'undefined' ? GmailApp.search(query, 0, 15) : [];
 
     var known = orqSeen_(ss);
     var candidateItems = [];
