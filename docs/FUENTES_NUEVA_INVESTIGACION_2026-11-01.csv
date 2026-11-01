@@ -1,0 +1,13 @@
+source_id,source_name,source_url,original_group,original_score,original_verification_date,revised_priority,verified_evidence,automation_status
+SRC_001,Tusclases Argentina,https://www.tusclases.com.ar/buscar/alumnos.aspx,A,95,2026-11-02,P0,public_student_requests,official_email_alerts_manual_only
+SRC_002,Tusclases Chile,https://www.tusclasesparticulares.cl/estudiantes/,A,90,2026-11-02,P1,public_recent_science_requests,manual_only_verify_AR_eligibility
+SRC_003,Reddit r/UBA,https://www.reddit.com/r/UBA/,A,85,2026-11-02,P2,historic_requests_specific_example_unverified,manual_review_commercial_API_requires_agreement
+SRC_004,Reddit r/UTN,https://www.reddit.com/r/UTN/,A,85,2026-11-02,P2,october_2026_ASI_request_verified,manual_review_commercial_API_requires_agreement
+SRC_005,Reddit r/Burises,https://www.reddit.com/r/Burises/,A,75,2026-11-02,P2,august_2026_paid_math_physics_request,manual_review_commercial_API_requires_agreement
+SRC_006,Tusclases Peru,https://www.tusclases.pe/estudiantes/online/,B,80,2026-11-02,P1,public_online_board_with_science_requests,manual_only_verify_AR_eligibility
+SRC_007,Workana,https://www.workana.com/es/jobs?category=engineering-manufacturing,B,70,2026-11-02,P3,example_2024_not_current_demand,manual_search_current_projects_only
+SRC_008,Tusclases Spain,https://www.tusclasesparticulares.com/estudiantes/,B,65,2026-11-02,P2,student_requests_mechanism,manual_only_verify_access
+SRC_009,Preply Student Board,https://preply.com/es/online/ofertas-profesor,B,55,2026-11-02,C,student_requests_exist_but_in_platform_and_commissions,profile_signup_economic_feasibility
+SRC_010,Superprof AR,https://www.superprof.com.ar/,C,10,2026-11-02,C,inbound_teacher_directory,inbound_notifications_only
+SRC_011,Computrabajo PE,https://pe.computrabajo.com/,D,0,2026-11-02,D,institutional_jobs_not_tutoring_leads,exclude
+SRC_012,Magneto365,https://www.magneto365.com/,D,0,2026-11-02,D,institutional_jobs_not_tutoring_leads,exclude
