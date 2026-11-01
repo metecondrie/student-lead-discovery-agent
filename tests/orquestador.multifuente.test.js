@@ -639,3 +639,21 @@ test('regresión F-01: Gmail clasificado Media por reglas se conserva para revis
   const rows = env.sheets.OrqHallazgos.rows.slice(1);
   assert.ok(rows.some(r => r[11] === 'REVISAR' && r[2] === 'Gmail'));
 });
+
+test('control RPM: espacia las solicitudes Gemini sucesivas sin modificar el cupo diario', () => {
+  const env = createMockEnv();
+  const p = env.ctx.PropertiesService.getScriptProperties();
+  const before = Date.now();
+  env.props.ORQ_GEMINI_LAST_CALL_MS = String(before);
+  let sleptMs = 0;
+  env.ctx.Utilities.sleep = (ms) => { sleptMs = ms; };
+  env.ctx.orqPaceGemini_(p);
+  assert.ok(sleptMs > 0 && sleptMs <= 7000, 'espaciado de hasta 7 segundos');
+  assert.ok(Number(env.props.ORQ_GEMINI_LAST_CALL_MS) >= before);
+  assert.equal(env.stats.gem, 0, 'la espera no contabiliza llamadas adicionales');
+
+  sleptMs = 0;
+  env.props.ORQ_GEMINI_LAST_CALL_MS = String(Date.now() - 10000);
+  env.ctx.orqPaceGemini_(p);
+  assert.equal(sleptMs, 0, 'sin espera cuando ya transcurrió el intervalo');
+});
