@@ -1,0 +1,9 @@
+family_id,source_name,source_url,original_group,original_score,revised_priority,verified_evidence,automation_status,next_action
+REDDIT_SEARCH_META,Reddit cross-community search,https://www.reddit.com/search.rss?q=%22profesor+particular%22,A,74,P2,example_unavailable_independently,MANUAL_ONLY_COMMERCIAL_AUTH_REQUIRED,verify_actual_open_requests_and_permission
+REDDIT_LAPLATA,Reddit LaPlataCiudad,https://www.reddit.com/r/LaPlataCiudad/,A,68,P2,old_request_2026_09_claimed_not_independently_retrieved,MANUAL_ONLY,check_2026_11_requests_and_rules
+REDDIT_UNLAM,Reddit UNLaM,https://www.reddit.com/r/UNLaM/,A,58,P2,october_example_not_independently_retrieved,MANUAL_ONLY,verify_details_subject_and_open_status
+REDDIT_BUENOSAIRES,Reddit BuenosAires,https://www.reddit.com/r/BuenosAires/,A,60,P3,historic_post_claimed_no_recent_volume,MANUAL_ONLY,check_actual_open_requests
+REDDIT_MATEMATICAS,Reddit Matematicas,https://www.reddit.com/r/Matematicas/,A,52,P3,august_example_claimed_zero_recent_volume,MANUAL_ONLY,verify_contactable_and_rules
+ALERTS_TALKWALKER,Talkwalker Alerts,https://www.talkwalker.com/es/alerts,B,45,P1,official_alert_service_not_lead_board,OFFICIAL_ALERTS_ONLY,test_quality_of_new_matches
+FACEBOOK_MATEMATICA_AR,Facebook Matematica Argentina,https://www.facebook.com/groups/339438288704905,B,52,P2,partially_indexed_group_content_not_verified,MANUAL_ONLY,check_recent_posts_access_rules
+FACEBOOK_EXACTAS_AR,Facebook Particulares Exactas Argentina,https://www.facebook.com/groups/310233947095804,B,55,P2,partially_indexed_group_content_not_verified,MANUAL_ONLY,check_recent_posts_access_rules
