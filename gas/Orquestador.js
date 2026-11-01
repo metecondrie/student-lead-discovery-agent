@@ -1619,16 +1619,21 @@ function orqContactHistory_(ss) {
   var output = {
     known: {}, possibleSent: {}, crmChecked: false,
     receiptsChecked: false, sentChecked: false, incomplete: false,
-    crmRows: 0, receiptMatches: 0, receiptUnparsed: 0
+    crmRows: 0, crmWithId: 0, receiptMatches: 0, receiptMessages: 0,
+    receiptUnparsed: 0, crmUnique: 0, receiptUnique: 0, receiptNotInCrm: 0
   };
+  var crmIds = {}, receiptIds = {};
   var sh = ss.getSheetByName('Contactados');
   if (sh) {
     output.crmChecked = true;
     orqRows_(sh).forEach(function(row) {
-      if (!row || !row[0]) return;
+      if (!row || (!row[0] && !row[2])) return;
       output.crmRows++;
-      orqTusclasesIds_(row[2]).forEach(function(id) {
+      var rowIds = orqTusclasesIds_(row[2]);
+      if (rowIds.length) output.crmWithId++;
+      rowIds.forEach(function(id) {
         output.known[id] = true;
+        crmIds[id] = true;
       });
     });
   } else {
@@ -1653,10 +1658,15 @@ function orqContactHistory_(ss) {
         if (!/Mensaje desde tusclases\.com\.ar:/i.test(sub)) return;
         var body = String(m.getPlainBody() || '');
         if (!/se ha enviado correctamente/i.test(body)) return;
+        output.receiptMessages++;
         var ids = orqTusclasesIds_(body);
-        if (!ids.length) output.receiptUnparsed++;
+        if (!ids.length) {
+          output.receiptUnparsed++;
+          output.incomplete = true;
+        }
         ids.forEach(function(id) {
           output.known[id] = true;
+          receiptIds[id] = true;
           output.receiptMatches++;
         });
       });
@@ -1685,7 +1695,36 @@ function orqContactHistory_(ss) {
   } catch(e) {
     output.incomplete = true;
   }
+  output.crmUnique = Object.keys(crmIds).length;
+  output.receiptUnique = Object.keys(receiptIds).length;
+  output.receiptNotInCrm = Object.keys(receiptIds).filter(function(id) {
+    return !crmIds[id];
+  }).length;
   return output;
+}
+
+/** Informe agregado y de solo lectura; no devuelve nombres, IDs, URLs ni cuerpos. */
+function orqDiagnosticoContactosSoloLectura() {
+  var ss = orqDb_();
+  var h = orqContactHistory_(ss);
+  return {
+    modo: 'SOLO_LECTURA',
+    contactosCRM: h.crmRows,
+    contactosCRMConIdentificador: h.crmWithId,
+    anunciosUnicosCRM: h.crmUnique,
+    confirmacionesGmail: h.receiptMessages,
+    anunciosUnicosConfirmaciones: h.receiptUnique,
+    confirmacionesSinIdentificador: h.receiptUnparsed,
+    anunciosConfirmadosNoRegistradosEnCRM: h.receiptNotInCrm,
+    fuentesConsultadas: {
+      contactados: h.crmChecked,
+      gmailRecibidos: h.receiptsChecked,
+      gmailEnviados: h.sentChecked
+    },
+    revisionIncompleta: h.incomplete,
+    mensajeriaInternaVerificada: false,
+    advertencia: 'Revisá las conversaciones internas antes de escribir. Este informe no envía mensajes ni edita datos.'
+  };
 }
 
 function orqContactDecision_(item, history) {
