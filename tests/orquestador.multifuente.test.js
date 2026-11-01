@@ -601,6 +601,54 @@ function addGmailFixture_(env, id) {
   ]);
 }
 
+test('diagnóstico solo lectura: cruza propiedades, cola y resumen sin tocar APIs ni datos', () => {
+  const env = createMockEnv();
+  const empty = env.ctx.orqDiagnosticoSoloLectura();
+  assert.equal(empty.versionDiagnostico, 'solo-lectura-v1');
+  assert.equal(empty.estadoScriptProperties, 'SIN_CORRIDAS');
+  assert.equal(empty.cola.trabajos, 0);
+
+  env.ctx.orqStart(['YT-01'], 10);
+  const before = JSON.stringify({
+    props: env.props,
+    sheets: Object.fromEntries(Object.keys(env.sheets).map(name => [name, env.sheets[name].rows])),
+    triggers: env.triggers.length,
+    requests: env.httpRequests.length
+  });
+  const diag = env.ctx.orqDiagnosticoSoloLectura();
+  const after = JSON.stringify({
+    props: env.props,
+    sheets: Object.fromEntries(Object.keys(env.sheets).map(name => [name, env.sheets[name].rows])),
+    triggers: env.triggers.length,
+    requests: env.httpRequests.length
+  });
+
+  assert.equal(diag.sinEfectosLaterales, true);
+  assert.equal(diag.estadoScriptProperties, 'FINALIZADO');
+  assert.equal(diag.estadoResumen, 'FINALIZADO');
+  assert.equal(diag.cola.trabajos, 1);
+  assert.equal(diag.cola.completadosCola, 1);
+  assert.equal(diag.cola.completadosVerificados, 1);
+  assert.equal(diag.completadosResumen, 1);
+  assert.equal(diag.triggersOrqTick, 0);
+  assert.equal(before, after, 'diagnóstico no modifica ninguna planilla, propiedad, trigger o HTTP');
+  assert.doesNotMatch(JSON.stringify(diag), /test-yt-key-123|test-gem-key-456|msg-01|@tusclases/);
+
+  // Simular el fallo histórico del orquestador anterior sin reejecutarlo.
+  env.sheets.OrqFuentes.rows[1][5] = 'ERROR_GMAIL';
+  const historical = env.ctx.orqDiagnosticoSoloLectura();
+  assert.equal(historical.cola.completadosCola, 1);
+  assert.equal(historical.cola.completadosVerificados, 0);
+  assert.equal(historical.cola.completadosConError, 1);
+  assert.equal(historical.cola.inconsistencias, 1);
+  assert.equal(historical.completadosResumen, 1, 'marca que el resumen guardado está desfasado');
+
+  env.sheets.OrqFuentes.rows.splice(1, 1);
+  const noLog = env.ctx.orqDiagnosticoSoloLectura();
+  assert.equal(noLog.cola.completadosSinRegistro, 1);
+  assert.equal(noLog.cola.completadosVerificados, 0);
+});
+
 test('piloto: previsualización de cuatro fuentes es de solo lectura y detecta fallas', () => {
   const env = createMockEnv();
   const sourceRows = [
