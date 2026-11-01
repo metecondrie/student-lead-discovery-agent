@@ -1023,6 +1023,25 @@ test('regresión F-01: Gmail no atribuye contacto voluntario ni confianza cuando
   assert.match(String(env.sheets.OrqFuentes.rows[1][15]), /ERROR_GEMINI/);
 });
 
+test('RSS: reconoce materias con tildes, omite fechas desconocidas y no inventa recencia', () => {
+  const env = createMockEnv();
+  const now = new Date();
+  env.ctx.parseRss = () => [
+    { title: 'Química', text: 'contenido', url: 'https://foros.example/1', date: now },
+    { title: 'Física', text: 'contenido', url: 'https://foros.example/2' },
+    { title: 'Álgebra', text: 'contenido', url: 'https://foros.example/3', date: new Date('2024-01-01') }
+  ];
+  env.ctx.orqStart(['RSS-01'], 10);
+  const logs = env.sheets.OrqFuentes.rows.slice(1);
+  assert.equal(logs.length, 1);
+  assert.equal(logs[0][6], 3, 'total de publicaciones leídas');
+  assert.equal(logs[0][8], 1, 'solo la publicación con fecha actual y tilde se clasifica');
+  assert.match(String(logs[0][15]), /1 publicación\(es\) sin fecha válida/);
+  const hallazgos = env.sheets.OrqHallazgos.rows.slice(1);
+  assert.equal(hallazgos.length, 1);
+  assert.equal(hallazgos[0][5], 'https://foros.example/1');
+});
+
 test('control RPM: espacia las solicitudes Gemini sucesivas sin modificar el cupo diario', () => {
   const env = createMockEnv();
   const p = env.ctx.PropertiesService.getScriptProperties();
