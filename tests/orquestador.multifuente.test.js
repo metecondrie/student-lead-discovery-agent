@@ -698,6 +698,13 @@ test('deduplicación Gmail: dos enlaces con tracking al mismo aviso de Tusclases
   assert.notEqual(env.ctx.orqGmailStableId_(dashboard, 'correo-A'),
                   env.ctx.orqGmailStableId_(dashboard, 'correo-B'),
                   'el mismo enlace genérico no autoriza fusionar dos estudiantes');
+  // Superprof envía distintas consultas con enlaces al mismo perfil del tutor.
+  // No deduplicar por ese enlace: son alumnos potencialmente diferentes.
+  const profile = {source:'superprof',url:'https://www.superprof.com.ar/profesor/perfil',
+    title:'Nueva solicitud de Matemática'};
+  assert.notEqual(env.ctx.orqGmailStableId_(profile, 'mensaje-estudiante-1'),
+                  env.ctx.orqGmailStableId_(profile, 'mensaje-estudiante-2'),
+                  'dos mensajes a un mismo perfil pueden ser dos alumnos distintos');
 });
 
 test('deduplicación Gmail: dos emails distintos del mismo aviso no gastan dos clasificaciones', () => {
