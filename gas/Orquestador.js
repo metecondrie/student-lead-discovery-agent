@@ -1078,7 +1078,25 @@ function orqExecuteGmail_(ss, run, source) {
   return res;
 }
 
+/**
+ * Control preventivo de RPM para el orquestador STAGING.
+ * Espacia cada petición Gemini >= 7 segundos (aprox. 8-9 RPM), por debajo
+ * de los 15 RPM disponibles en Gemini 3.5 Flash-Lite del proyecto revisado.
+ * No cambia ni intenta eludir la cuota real RPD/TPM de Google.
+ * orqTick ya usa el LockService del script: no hay llamadas concurrentes del orquestador.
+ */
+function orqPaceGemini_(p) {
+  var minMs = 7000;
+  var lastMs = Number(p.getProperty('ORQ_GEMINI_LAST_CALL_MS') || 0);
+  var waitMs = Math.max(0, minMs - (Date.now() - lastMs));
+  if (waitMs > 0 && typeof Utilities !== 'undefined' && typeof Utilities.sleep === 'function') {
+    Utilities.sleep(waitMs);
+  }
+  p.setProperty('ORQ_GEMINI_LAST_CALL_MS', String(Date.now()));
+}
+
 function orqCallGeminiBatch_(batch, model, key) {
+  orqPaceGemini_(PropertiesService.getScriptProperties());
   var prompt = typeof buildGeminiPrompt === 'function' ? buildGeminiPrompt(batch) : JSON.stringify(batch);
   var url = 'https://generativelanguage.googleapis.com/v1beta/models/' +
     encodeURIComponent(model) + ':generateContent';
