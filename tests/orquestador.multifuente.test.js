@@ -556,3 +556,54 @@ test('9. Migración se limita a STAGING y preserva encabezados con tildes', () =
   const backup = env.sheets[result.backupHoja];
   assert.equal(backup.rows[0][13], 'Última revisión');
 });
+
+
+test('regresión: dos fuentes Gmail consecutivas no reutilizan objetos GmailThread serializados', () => {
+  const env = createMockEnv();
+  for (const id of ['GM-01', 'GM-02']) {
+    env.sheets.Fuentes.rows.push([
+      id, 'Tusclases', 'Alertas Tusclases ' + id, 'Matemática', 'CBC',
+      'https://www.tusclases.com.ar', '', true, 'gmail_autorizado', 'P0',
+      'DISPONIBLE', 'gmail_alertas', 'Alertas Gmail'
+    ]);
+  }
+  env.ctx.orqStart(['GM-01', 'GM-02'], 10);
+  env.ctx.orqTick();
+  const sources = env.sheets.OrqFuentes.rows.slice(1);
+  assert.equal(sources.length, 2);
+  assert.ok(sources.every(row => row[5] !== 'ERROR_GMAIL'));
+  assert.ok(sources.every(row => row[5] === 'OK'));
+  assert.equal(JSON.parse(env.props.ORQ_RUN)._gmailCache, undefined);
+  assert.equal(env.ctx.orqStatus().estado, 'FINALIZADO');
+});
+
+test('regresión: cuota vencida no dispara reintentos infinitos ni progreso ficticio', () => {
+  const env = createMockEnv();
+  env.ctx.orqStart(['YT-01', 'YT-02'], 10);
+  env.stats.gem = 50; // Sin llamadas disponibles.
+  env.ctx.orqTick();  // Intenta el segundo job y queda pausado.
+  let status = env.ctx.orqStatus();
+  assert.equal(status.estado, 'PAUSADO_CUOTA');
+  assert.equal(status.cursor, 1); // Segundo trabajo NO procesado.
+  assert.equal(status.metricas.fuentes, 1);
+  assert.equal(status.metricas.errores, 0); // La cuota no equivale a error de fuente.
+  const logCount = env.sheets.OrqFuentes.rows.length;
+  const attempts = env.sheets.OrqCola.rows[2][6];
+  // Simular que transcurrió el intervalo, pero Gemini sigue sin capacidad.
+  const run = JSON.parse(env.props.ORQ_RUN);
+  run.proximaReanudacion = new Date(Date.now() - 60000).toISOString();
+  env.props.ORQ_RUN = JSON.stringify(run);
+  env.ctx.orqTick();
+  status = env.ctx.orqStatus();
+  assert.equal(status.estado, 'PAUSADO_CUOTA');
+  assert.equal(env.sheets.OrqFuentes.rows.length, logCount);
+  assert.equal(env.sheets.OrqCola.rows[2][6], attempts);
+  assert.equal(status.cursor, 1);
+  assert.equal(status.metricas.fuentes, 1);
+  assert.ok(env.triggers.length > 0);
+  // La cuota sí se restablece: continúa la misma corrida.
+  env.stats.gem = 0;
+  env.ctx.orqTick();
+  assert.equal(env.ctx.orqStatus().estado, 'FINALIZADO');
+  assert.equal(env.ctx.orqStatus().cursor, 2);
+});
