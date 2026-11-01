@@ -1431,15 +1431,20 @@ function orqExecuteRss_(ss, run, source, jobCursor) {
       return res;
     }
 
-    // Filtrar publicaciones recientes (14 días) y con palabras clave de estudio/clases
+    // Nunca inferir recencia si el RSS no trae fecha válida. Normalizar
+    // tildes: física/analisis/química deben pasar el mismo prefiltro.
     var now = Date.now(), windowMs = 14 * 86400000;
+    var withoutDate = 0;
     var relevant = items.filter(function(it) {
       var rawDate = it.publishedAt || it.date;
-      var at = rawDate ? new Date(rawDate).getTime() : now;
-      if (now - at > windowMs) return false;
-      var txt = ((it.title || '') + ' ' + (it.text || '')).toLowerCase();
-      return /clases|profesor|particular|parcial|final|ayuda|quimica|fisica|matematica|algebra|analisis/i.test(txt);
+      var at = rawDate ? new Date(rawDate).getTime() : NaN;
+      if (!isFinite(at)) { withoutDate++; return false; }
+      if (at > now + 86400000 || now - at > windowMs) return false;
+      var txt = ((it.title || '') + ' ' + (it.text || '')).toLowerCase()
+        .normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+      return /clases?|profesor(?:a)?|particular|parcial|final|ayuda|busco|necesito|necesitan|tutori[ao]|examen|quimica|fisica|matematica|algebra|analisis|biologia|ingreso/i.test(txt);
     });
+    if (withoutDate) res.mensaje = withoutDate + ' publicación(es) sin fecha válida, excluidas del filtro de recencia';
 
     relevant.forEach(function(it) {
       var id = 'RSS-' + orqHash_(it.url || it.title);
