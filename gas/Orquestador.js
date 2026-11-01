@@ -1544,27 +1544,52 @@ function orqExecuteRss_(ss, run, source, jobCursor) {
 }
 
 /**
+ * Decodifica únicamente secuencias percent-encoded válidas (%XX), preservando
+ * caracteres "%" no escapados comunes en HTML y CSS (ej. width="100%").
+ * Evita excepciones URIError: URI malformed que detengan el procesamiento de enlaces.
+ */
+function orqSafeDecodeUriComponent_(str) {
+  if (!str) return '';
+  return str.replace(/(%[0-9A-Fa-f]{2})+/g, function(match) {
+    try {
+      return decodeURIComponent(match);
+    } catch(e) {
+      return match;
+    }
+  });
+}
+
+/**
  * Decodifica Base64URL (web-safe) a cadena UTF-8.
  */
 function orqDecodeBase64WebSafe_(data) {
   if (!data) return '';
+  var clean = String(data).replace(/\s+/g, '');
   try {
     if (typeof Utilities !== 'undefined' && typeof Utilities.base64DecodeWebSafe === 'function') {
-      return Utilities.newBlob(Utilities.base64DecodeWebSafe(data)).getDataAsString('UTF-8');
+      return Utilities.newBlob(Utilities.base64DecodeWebSafe(clean)).getDataAsString('UTF-8');
+    }
+  } catch(e) {}
+  try {
+    if (typeof Utilities !== 'undefined' && typeof Utilities.base64Decode === 'function') {
+      var stdB64 = clean.replace(/-/g, '+').replace(/_/g, '/');
+      while (stdB64.length % 4) stdB64 += '=';
+      return Utilities.newBlob(Utilities.base64Decode(stdB64)).getDataAsString('UTF-8');
     }
   } catch(e) {}
   try {
     if (typeof Buffer !== 'undefined') {
-      return Buffer.from(data, 'base64url').toString('utf8');
+      return Buffer.from(clean, 'base64url').toString('utf8');
     }
   } catch(e) {}
   try {
-    var base64 = data.replace(/-/g, '+').replace(/_/g, '/');
-    while (base64.length % 4) base64 += '=';
-    return decodeURIComponent(escape(atob(base64)));
-  } catch(e) {
-    return '';
-  }
+    var b64 = clean.replace(/-/g, '+').replace(/_/g, '/');
+    while (b64.length % 4) b64 += '=';
+    if (typeof atob === 'function') {
+      return decodeURIComponent(escape(atob(b64)));
+    }
+  } catch(e) {}
+  return '';
 }
 
 function orqGetHeader_(headers, name) {
@@ -1588,10 +1613,10 @@ function orqExtractMessageBodies_(payload) {
     var data = part.body && part.body.data;
     if (data) {
       var decoded = orqDecodeBase64WebSafe_(data);
-      if (mime === 'text/plain' && !result.plain) {
-        result.plain = decoded;
-      } else if (mime === 'text/html' && !result.html) {
-        result.html = decoded;
+      if (/^text\/plain\b/i.test(mime)) {
+        result.plain += (result.plain ? '\n' : '') + decoded;
+      } else if (/^text\/html\b/i.test(mime)) {
+        result.html += (result.html ? '\n' : '') + decoded;
       }
     }
     if (Array.isArray(part.parts)) {
@@ -1606,6 +1631,7 @@ function orqExtractMessageBodies_(payload) {
 function orqWrapAdvancedMessage_(msg, threadId) {
   var headers = (msg.payload && msg.payload.headers) || [];
   var bodies = orqExtractMessageBodies_(msg.payload);
+  var usedSnippet = !bodies.plain && !bodies.html && !!msg.snippet;
   var plainBody = bodies.plain || msg.snippet || '';
   var htmlBody = bodies.html || '';
   var subject = orqGetHeader_(headers, 'Subject');
@@ -1619,7 +1645,8 @@ function orqWrapAdvancedMessage_(msg, threadId) {
     getSubject: function() { return subject; },
     getDate: function() { return mDate; },
     getPlainBody: function() { return plainBody; },
-    getBody: function() { return htmlBody || plainBody; }
+    getBody: function() { return htmlBody || plainBody; },
+    isSnippetFallback: function() { return usedSnippet; }
   };
 }
 
@@ -1814,11 +1841,9 @@ function orqTusclasesIds_(input) {
     while ((hit = regex.exec(s)) !== null) result[hit[1]] = true;
     var query = /(?:tusclases\.(?:com\.ar|com|co|pe|mx)|tusclasesparticulares\.(?:cl|com))\/[^\s"'<>]{0,500}?[?&]id=(\d{5,})(?=[&#\s"'<>,.;:)]|$)/gi;
     while ((hit = query.exec(s)) !== null) result[hit[1]] = true;
-    try {
-      var decoded = decodeURIComponent(s);
-      if (decoded === s) break;
-      s = decoded;
-    } catch(e) { break; }
+    var decoded = orqSafeDecodeUriComponent_(s);
+    if (decoded === s) break;
+    s = decoded;
   }
   var trimmed = s.trim();
   if (/^\d{5,8}$/.test(trimmed)) {
@@ -1841,30 +1866,28 @@ function orqTusclasesDomain_(input) {
     var m = s.match(/(?:https?:\/\/)?(?:www\.)?((?:tusclases\.(?:com\.ar|com|co|pe|mx)|tusclasesparticulares\.(?:cl|com)))/i);
     if (m) {
       var dom = m[1].toLowerCase();
-      if (dom.indexOf('cl') >= 0) return 'tusclasesparticulares.cl';
-      if (dom.indexOf('co') >= 0) return 'tusclases.co';
-      if (dom.indexOf('com.ar') >= 0) return 'tusclases.com.ar';
-      if (dom.indexOf('pe') >= 0) return 'tusclases.pe';
-      if (dom.indexOf('mx') >= 0) return 'tusclases.mx';
+      if (/\.cl\b/i.test(dom) || dom.indexOf('tusclasesparticulares') >= 0) return 'tusclasesparticulares.cl';
+      if (/\.co\b/i.test(dom)) return 'tusclases.co';
+      if (/\.com\.ar\b/i.test(dom)) return 'tusclases.com.ar';
+      if (/\.pe\b/i.test(dom)) return 'tusclases.pe';
+      if (/\.mx\b/i.test(dom)) return 'tusclases.mx';
       return dom;
     }
-    try {
-      var decoded = decodeURIComponent(s);
-      if (decoded === s) break;
-      s = decoded;
-    } catch(e) { break; }
+    var decoded = orqSafeDecodeUriComponent_(s);
+    if (decoded === s) break;
+    s = decoded;
   }
   return '';
 }
 
 function orqDomainToCountry_(domain) {
   var d = String(domain || '').toLowerCase();
-  if (d.indexOf('cl') >= 0) return 'CL';
-  if (d.indexOf('co') >= 0) return 'CO';
-  if (d.indexOf('ar') >= 0) return 'AR';
-  if (d.indexOf('pe') >= 0) return 'PE';
-  if (d.indexOf('mx') >= 0) return 'MX';
-  if (d.indexOf('com') >= 0) return 'ES';
+  if (/\.cl\b/i.test(d) || d === 'cl') return 'CL';
+  if (/\.co\b/i.test(d) || d === 'co') return 'CO';
+  if (/\.com\.ar\b/i.test(d) || d === 'ar') return 'AR';
+  if (/\.pe\b/i.test(d) || d === 'pe') return 'PE';
+  if (/\.mx\b/i.test(d) || d === 'mx') return 'MX';
+  if (/\.com\b/i.test(d) || d === 'com' || d === 'es') return 'ES';
   return 'GENERIC';
 }
 
@@ -1890,11 +1913,9 @@ function orqTusclasesAdKeys_(input) {
       var id = String(hit[2]);
       result[dom + ':' + id] = true;
     }
-    try {
-      var decoded = decodeURIComponent(s);
-      if (decoded === s) break;
-      s = decoded;
-    } catch(e) { break; }
+    var decoded = orqSafeDecodeUriComponent_(s);
+    if (decoded === s) break;
+    s = decoded;
   }
   return Object.keys(result);
 }
@@ -1924,7 +1945,30 @@ function orqContactHistory_(ss, opts) {
     receiptUnparsed: 0,
     crmUnique: 0,
     receiptUnique: 0,
-    receiptNotInCrm: 0
+    receiptNotInCrm: 0,
+    etapas: {
+      busqueda: {
+        hilosRecuperados: 0,
+        busquedaIncompleta: false
+      },
+      lectura: {
+        mensajesTotal: 0,
+        mensajesAsuntoCoincidente: 0,
+        mensajesConfirmacionTexto: 0
+      },
+      decodificacion: {
+        conTextoPlano: 0,
+        conHtml: 0,
+        conSnippetFallback: 0
+      },
+      extraccion: {
+        conEnlacesTracking: 0,
+        conClavesExtraidas: 0,
+        anunciosUnicos: 0,
+        anunciosPorPais: {},
+        mensajesSinIdentificador: 0
+      }
+    }
   };
   var crmKeys = {}, receiptKeys = {};
   var sh = ss.getSheetByName('Contactados');
@@ -1972,24 +2016,52 @@ function orqContactHistory_(ss, opts) {
   }
 
   // Comprobantes de Tusclases recibidos (Argentina, Chile, Colombia, España).
+  // Agrupación booleana explícita para evitar precedencia implícita de AND sobre OR en Gmail.
   try {
-    var receiptQuery = 'newer_than:365d subject:"Mensaje desde tusclases" OR newer_than:365d subject:"Mensaje desde tusclasesparticulares"';
+    var receiptQuery = 'newer_than:365d subject:"Mensaje desde tusclases" OR (newer_than:365d subject:"Mensaje desde tusclasesparticulares") OR (newer_than:365d subject:"Mensaje desde tusclases.co") OR (newer_than:365d subject:"Mensaje desde tusclases.com.ar") OR (newer_than:365d subject:"tusclases")';
     var receiptThreads = orqSearchGmail_(receiptQuery, 100);
     if (!Array.isArray(receiptThreads)) throw new Error('Búsqueda Gmail inválida');
-    if (receiptThreads.length === 100 || receiptThreads.incompleto) output.incomplete = true;
+    output.etapas.busqueda.hilosRecuperados = receiptThreads.length;
+    if (receiptThreads.length === 100 || receiptThreads.incompleto) {
+      output.incomplete = true;
+      output.etapas.busqueda.busquedaIncompleta = true;
+    }
     receiptThreads.forEach(function(raw) {
       var thread = orqHydrateGmailThread_(raw);
       thread.getMessages().forEach(function(m) {
+        output.etapas.lectura.mensajesTotal++;
         var sub = String(m.getSubject() || '');
         if (!/Mensaje desde (?:tusclases|tusclasesparticulares)/i.test(sub)) return;
-        var body = String(m.getPlainBody() || '');
-        if (!/se ha enviado correctamente|mensaje.*enviado.*correctamente/i.test(body)) return;
+        output.etapas.lectura.mensajesAsuntoCoincidente++;
+
+        var plain = typeof m.getPlainBody === 'function' ? String(m.getPlainBody() || '') : '';
+        var html = typeof m.getBody === 'function' ? String(m.getBody() || '') : '';
+        if (plain) output.etapas.decodificacion.conTextoPlano++;
+        if (html && html !== plain) output.etapas.decodificacion.conHtml++;
+        if (typeof m.isSnippetFallback === 'function' && m.isSnippetFallback()) {
+          output.etapas.decodificacion.conSnippetFallback++;
+        }
+
+        var fullBody = plain + '\n' + html;
+        if (!/se ha enviado correctamente|mensaje.*enviado.*correctamente/i.test(fullBody) &&
+            !/se ha enviado correctamente|mensaje.*enviado.*correctamente/i.test(sub)) {
+          return;
+        }
+        output.etapas.lectura.mensajesConfirmacionTexto++;
         output.receiptMessages++;
-        var keys = orqTusclasesAdKeys_(body);
-        var bareIds = orqTusclasesIds_(body);
+
+        if (/awstrack\.me|email\.tusclasesparticulares|r\.email\.tusclases|aws/i.test(fullBody)) {
+          output.etapas.extraccion.conEnlacesTracking++;
+        }
+
+        var keys = orqTusclasesAdKeys_(fullBody);
+        var bareIds = orqTusclasesIds_(fullBody);
         if (!keys.length && !bareIds.length) {
           output.receiptUnparsed++;
+          output.etapas.extraccion.mensajesSinIdentificador++;
           output.incomplete = true;
+        } else {
+          output.etapas.extraccion.conClavesExtraidas++;
         }
         keys.forEach(function(k) {
           output.knownCanonical[k] = true;
@@ -1999,7 +2071,11 @@ function orqContactHistory_(ss, opts) {
           var num = k.split(':')[1];
           output.known[num] = true;
           var country = orqDomainToCountry_(dom);
-          if (country) output.knownCanonical[country.toLowerCase() + ':' + num] = true;
+          if (country) {
+            output.knownCanonical[country.toLowerCase() + ':' + num] = true;
+            output.etapas.extraccion.anunciosPorPais[country] =
+              (output.etapas.extraccion.anunciosPorPais[country] || 0) + 1;
+          }
         });
         bareIds.forEach(function(num) {
           output.known[num] = true;
@@ -2020,8 +2096,10 @@ function orqContactHistory_(ss, opts) {
     sent.forEach(function(raw) {
       var thread = orqHydrateGmailThread_(raw);
       thread.getMessages().forEach(function(m) {
-        var plain = String(m.getPlainBody() || '');
-        orqTusclasesAdKeys_(plain).forEach(function(k) {
+        var plain = typeof m.getPlainBody === 'function' ? String(m.getPlainBody() || '') : '';
+        var html = typeof m.getBody === 'function' ? String(m.getBody() || '') : '';
+        var fullSent = plain + '\n' + html;
+        orqTusclasesAdKeys_(fullSent).forEach(function(k) {
           output.possibleSentCanonical[k] = true;
           var dom = k.split(':')[0];
           var num = k.split(':')[1];
@@ -2029,7 +2107,7 @@ function orqContactHistory_(ss, opts) {
           var country = orqDomainToCountry_(dom);
           if (country) output.possibleSentCanonical[country.toLowerCase() + ':' + num] = true;
         });
-        orqTusclasesIds_(plain).forEach(function(id) {
+        orqTusclasesIds_(fullSent).forEach(function(id) {
           output.possibleSent[id] = true;
         });
       });
@@ -2041,6 +2119,7 @@ function orqContactHistory_(ss, opts) {
 
   output.crmUnique = Object.keys(crmKeys).length;
   output.receiptUnique = Object.keys(receiptKeys).length;
+  output.etapas.extraccion.anunciosUnicos = output.receiptUnique;
   output.receiptNotInCrm = Object.keys(receiptKeys).filter(function(k) {
     return !crmKeys[k];
   }).length;
@@ -2067,6 +2146,7 @@ function orqDiagnosticoContactosSoloLectura() {
     },
     revisionIncompleta: h.incomplete,
     mensajeriaInternaVerificada: false,
+    etapas: h.etapas || {},
     advertencia: 'Revisá las conversaciones internas antes de escribir. Este informe no envía mensajes ni edita datos.'
   };
   console.log('[DIAGNOSTICO CONTACTOS (SOLO LECTURA)]:', JSON.stringify(report, null, 2));
@@ -2265,7 +2345,7 @@ function orqSyncContactReceipts(maxDays, dryRun) {
     var days = Number(maxDays) || 30;
     days = Math.min(Math.max(days, 1), 365);
 
-    var query = 'newer_than:' + days + 'd subject:"Mensaje desde tusclases" OR newer_than:' + days + 'd subject:"Mensaje desde tusclasesparticulares"';
+    var query = 'newer_than:' + days + 'd subject:"Mensaje desde tusclases" OR (newer_than:' + days + 'd subject:"Mensaje desde tusclasesparticulares") OR (newer_than:' + days + 'd subject:"Mensaje desde tusclases.co") OR (newer_than:' + days + 'd subject:"Mensaje desde tusclases.com.ar") OR (newer_than:' + days + 'd subject:"tusclases")';
     var threads = orqSearchGmail_(query, 50);
     if (threads && threads.incompleto) {
       res.busquedaIncompleta = true;
@@ -2290,12 +2370,15 @@ function orqSyncContactReceipts(maxDays, dryRun) {
         if (!/Mensaje desde (?:tusclases|tusclasesparticulares)/i.test(sub)) {
           return;
         }
-        var body = String(m.getPlainBody() || '');
-        if (!/se ha enviado correctamente|mensaje.*enviado.*correctamente/i.test(body)) {
+        var plain = typeof m.getPlainBody === 'function' ? String(m.getPlainBody() || '') : '';
+        var html = typeof m.getBody === 'function' ? String(m.getBody() || '') : '';
+        var fullBody = plain + '\n' + html;
+        if (!/se ha enviado correctamente|mensaje.*enviado.*correctamente/i.test(fullBody) &&
+            !/se ha enviado correctamente|mensaje.*enviado.*correctamente/i.test(sub)) {
           return;
         }
         res.comprobantesIdentificados++;
-        var keys = orqTusclasesAdKeys_(body);
+        var keys = orqTusclasesAdKeys_(fullBody);
         if (!keys.length) {
           res.sinIdentificador++;
           return;
@@ -2995,6 +3078,7 @@ if (typeof module !== 'undefined') {
     orqWrapAdvancedMessage_: orqWrapAdvancedMessage_,
     orqExtractMessageBodies_: orqExtractMessageBodies_,
     orqDecodeBase64WebSafe_: orqDecodeBase64WebSafe_,
+    orqSafeDecodeUriComponent_: orqSafeDecodeUriComponent_,
     orqSeedInitialContacts: orqSeedInitialContacts,
     orqEjecutarPrevisualizacionContactosIniciales: orqEjecutarPrevisualizacionContactosIniciales,
     ORQ_INITIAL_CONTACTS_20261101: ORQ_INITIAL_CONTACTS_20261101

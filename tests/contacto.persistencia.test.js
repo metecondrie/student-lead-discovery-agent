@@ -832,3 +832,214 @@ test('18. Diagnóstico de contactos: orqEjecutarDiagnosticoContactos imprime inf
 
   env.ctx.console.log = originalLog;
 });
+
+test('19. orqSafeDecodeUriComponent_: decodifica enlaces con redirección sin fallar ante width="100%" ni % no escapados', () => {
+  const env = createMockEnv();
+  const safeDecode = env.ctx.orqSafeDecodeUriComponent_;
+
+  // Caso 1: String HTML con width="100%" y style con %
+  const html = '<table width="100%" style="font-size: 90%;"><tr><td>Hola</td></tr></table>';
+  const out1 = safeDecode(html);
+  assert.equal(out1, html, 'No debe alterar ni arrojar URIError en un string con % sin codificar');
+
+  // Caso 2: URL percent-encoded con %3A%2F%2F
+  const encUrl = 'https%3A%2F%2Fwww.tusclasesparticulares.cl%2Favisos%2F2466158.aspx';
+  const out2 = safeDecode(encUrl);
+  assert.equal(out2, 'https://www.tusclasesparticulares.cl/avisos/2466158.aspx');
+
+  // Caso 3: HTML mixto que contiene width="100%" Y un enlace de tracking awstrack.me percent-encoded
+  const mixedHtml = '<table width="100%"><tr><td><a href="https://awstrack.me/L0/https%3A%2F%2Fwww.tusclases.co%2Fsolicitud%2F2466833.aspx/1/xxx">Link</a></td></tr></table>';
+  const outKeys = env.ctx.orqTusclasesAdKeys_(mixedHtml);
+  assert.deepEqual(Array.from(outKeys), ['tusclases.co:2466833']);
+});
+
+test('20. Reproducción exacta de STAGING: 5 comprobantes reales del 01/11/2026 (HTML con 100% y tracking) producen 4 claves únicas y 0 sin identificador', () => {
+  const env = createMockEnv();
+
+  // Simular las 10 filas existentes en STAGING (todas de Argentina)
+  for (let i = 1; i <= 10; i++) {
+    env.sheets.Contactados.rows.push([
+      'Alumno Argentina ' + i, 'Matemática',
+      'https://www.tusclases.com.ar/alumnos/ar-' + (2400000 + i) + '.aspx',
+      '2026-10-20', 'CRM previo'
+    ]);
+  }
+
+  // Helper para construir el recurso de mensaje compatible con Gmail.Users.Threads.get(..., format: 'full')
+  const makeFullMessageResource = (msgId, threadId, sub, plainText, htmlText) => {
+    const plainB64 = Buffer.from(plainText, 'utf8').toString('base64url');
+    const htmlB64 = Buffer.from(htmlText, 'utf8').toString('base64url');
+    return {
+      id: msgId,
+      threadId: threadId,
+      internalDate: '1730476800000',
+      payload: {
+        mimeType: 'multipart/alternative',
+        headers: [
+          { name: 'Subject', value: sub },
+          { name: 'From', value: 'avisos@tusclases.com' }
+        ],
+        parts: [
+          {
+            mimeType: 'text/plain; charset=UTF-8',
+            body: { data: plainB64 }
+          },
+          {
+            mimeType: 'text/html; charset=UTF-8',
+            body: { data: htmlB64 }
+          }
+        ]
+      }
+    };
+  };
+
+  // Los 5 correos recibidos el 01/11/2026 correspondientes a 4 anuncios
+  const mockThreads = {
+    // 1. Colombia 2466833 (primer comprobante)
+    'th-col-2466833-a': {
+      id: 'th-col-2466833-a',
+      messages: [makeFullMessageResource(
+        'm-col-a', 'th-col-2466833-a',
+        'Mensaje desde tusclases.co: Consulta recibida de Química',
+        'Tu mensaje al anunciante de: Química se ha enviado correctamente.',
+        '<table width="100%"><tr><td>Tu mensaje al anunciante de: Química se ha enviado correctamente.</td>' +
+        '<td><a href="https://r.email.tusclases.co/L0/https%3A%2F%2Fwww.tusclases.co%2Festudiantes%2Fquimica%2Fsolicitud-2466833.aspx/1/hash/aaa">Ver</a></td></tr></table>'
+      )]
+    },
+    // 2. Colombia 2466833 (segundo comprobante, duplicado)
+    'th-col-2466833-b': {
+      id: 'th-col-2466833-b',
+      messages: [makeFullMessageResource(
+        'm-col-b', 'th-col-2466833-b',
+        'Mensaje desde tusclases.co: Confirmación de envío de Química',
+        'Tu mensaje al anunciante de: Química se ha enviado correctamente.',
+        '<div style="width: 100%;"><p>Tu mensaje se ha enviado correctamente.</p>' +
+        '<a href="https://awstrack.me/L0/https%3A%2F%2Fwww.tusclases.co%2Festudiantes%2Fquimica%2Fsolicitud-2466833.aspx/2/hash/bbb">Ver</a></div>'
+      )]
+    },
+    // 3. Chile 2466158 (asunto exacto Mensaje desde tusclasesparticulares:)
+    'th-cl-2466158': {
+      id: 'th-cl-2466158',
+      messages: [makeFullMessageResource(
+        'm-cl-1', 'th-cl-2466158',
+        'Mensaje desde tusclasesparticulares: Consulta Álgebra',
+        'Tu mensaje al anunciante de: Álgebra se ha enviado correctamente.',
+        '<table width="100%"><tr><td>Tu mensaje al anunciante de: Álgebra se ha enviado correctamente.</td>' +
+        '<td><a href="https://email.tusclasesparticulares.cl/L0/https%3A%2F%2Fwww.tusclasesparticulares.cl%2Favisos%2Falgebra-2466158.aspx/1/hash/ccc">Ver</a></td></tr></table>'
+      )]
+    },
+    // 4. Chile 2466516 (asunto exacto Mensaje desde tusclasesparticulares:)
+    'th-cl-2466516': {
+      id: 'th-cl-2466516',
+      messages: [makeFullMessageResource(
+        'm-cl-2', 'th-cl-2466516',
+        'Mensaje desde tusclasesparticulares: Consulta Cálculo',
+        'Tu mensaje al anunciante de: Cálculo se ha enviado correctamente.',
+        '<table width="100%"><tr><td>Tu mensaje al anunciante de: Cálculo se ha enviado correctamente.</td>' +
+        '<td><a href="https://awstrack.me/L0/https%3A%2F%2Fwww.tusclasesparticulares.cl%2Fprofesores%2Fcalculo-2466516.aspx/1/hash/ddd">Ver</a></td></tr></table>'
+      )]
+    },
+    // 5. Chile 2465382 (asunto exacto Mensaje desde tusclasesparticulares:)
+    'th-cl-2465382': {
+      id: 'th-cl-2465382',
+      messages: [makeFullMessageResource(
+        'm-cl-3', 'th-cl-2465382',
+        'Mensaje desde tusclasesparticulares: Consulta Física',
+        'Tu mensaje al anunciante de: Física se ha enviado correctamente.',
+        '<table width="100%"><tr><td>Tu mensaje al anunciante de: Física se ha enviado correctamente.</td>' +
+        '<td><a href="https://awstrack.me/L0/https%3A%2F%2Fwww.tusclasesparticulares.cl%2Falumnos%2Ffisica-2465382.aspx/1/hash/eee">Ver</a></td></tr></table>'
+      )]
+    }
+  };
+
+  env.ctx.Gmail = {
+    Users: {
+      Threads: {
+        list: (userId, params) => ({
+          threads: Object.keys(mockThreads).map(id => ({ id: id })),
+          resultSizeEstimate: 5
+        }),
+        get: (userId, id) => mockThreads[id] || null
+      }
+    }
+  };
+
+  const report = env.ctx.orqEjecutarDiagnosticoContactos();
+
+  // Verificaciones exactas
+  assert.equal(report.modo, 'SOLO_LECTURA');
+  assert.equal(report.contactosCRM, 10, 'Conserva los 10 contactos CRM previos');
+  assert.equal(report.confirmacionesGmail, 5, 'Debe reconocer los 5 comprobantes de Gmail recibidos');
+  assert.equal(report.anunciosUnicosConfirmaciones, 4, 'Debe mapear a exactamente 4 anuncios únicos');
+  assert.equal(report.confirmacionesSinIdentificador, 0, 'No debe quedar ningún comprobante sin identificador extraído');
+  assert.equal(report.anunciosConfirmadosNoRegistradosEnCRM, 4, 'Los 4 anuncios confirmados de 01/11 aún no están en CRM');
+  assert.equal(report.revisionIncompleta, false, 'La revisión no debe quedar incompleta');
+  assert.equal(report.fuentesConsultadas.contactados, true);
+  assert.equal(report.fuentesConsultadas.gmailRecibidos, true);
+
+  // Verificación de clasificación para cada uno de los 4 anuncios
+  const hist = env.ctx.orqContactHistory_(env.ss);
+  assert.equal(env.ctx.orqContactDecision_({ url: 'https://www.tusclases.co/solicitud/2466833.aspx' }, hist), 'CONTACTADO_CONFIRMADO');
+  assert.equal(env.ctx.orqContactDecision_({ url: 'https://www.tusclasesparticulares.cl/avisos/2466158.aspx' }, hist), 'CONTACTADO_CONFIRMADO');
+  assert.equal(env.ctx.orqContactDecision_({ url: 'https://www.tusclasesparticulares.cl/profesores/2466516.aspx' }, hist), 'CONTACTADO_CONFIRMADO');
+  assert.equal(env.ctx.orqContactDecision_({ url: 'https://www.tusclasesparticulares.cl/alumnos/2465382.aspx' }, hist), 'CONTACTADO_CONFIRMADO');
+});
+
+test('21. Diagnóstico escalonado (etapas): detalla búsqueda, lectura, decodificación y extracción de forma agregada sin datos privados', () => {
+  const env = createMockEnv();
+
+  const makeFullMessage = (id, sub, htmlBody) => ({
+    id: 'msg-' + id,
+    threadId: 'th-' + id,
+    internalDate: '1730476800000',
+    payload: {
+      mimeType: 'text/html',
+      headers: [
+        { name: 'Subject', value: sub },
+        { name: 'From', value: 'notificaciones@tusclases.com' }
+      ],
+      body: {
+        data: Buffer.from(htmlBody, 'utf8').toString('base64url')
+      }
+    }
+  });
+
+  const threads = {
+    'th-1': {
+      id: 'th-1',
+      messages: [makeFullMessage('1', 'Mensaje desde tusclasesparticulares: Física', '<table width="100%"><tr><td>Tu mensaje se ha enviado correctamente.</td><td><a href="https://awstrack.me/L0/https%3A%2F%2Fwww.tusclasesparticulares.cl%2Favisos%2F2466158.aspx/1">Ver</a></td></tr></table>')]
+    },
+    'th-2': {
+      id: 'th-2',
+      messages: [makeFullMessage('2', 'Mensaje desde tusclases.co: Química', '<table width="100%"><tr><td>Tu mensaje se ha enviado correctamente.</td><td><a href="https://r.email.tusclases.co/L0/https%3A%2F%2Fwww.tusclases.co%2Fsolicitud%2F2466833.aspx/1">Ver</a></td></tr></table>')]
+    }
+  };
+
+  env.ctx.Gmail = {
+    Users: {
+      Threads: {
+        list: () => ({ threads: [{ id: 'th-1' }, { id: 'th-2' }], resultSizeEstimate: 2 }),
+        get: (userId, id) => threads[id] || null
+      }
+    }
+  };
+
+  const report = env.ctx.orqEjecutarDiagnosticoContactos();
+  assert.ok(report.etapas, 'El informe debe incluir la clave etapas');
+  assert.equal(report.etapas.busqueda.hilosRecuperados, 2);
+  assert.equal(report.etapas.busqueda.busquedaIncompleta, false);
+  assert.equal(report.etapas.lectura.mensajesTotal, 2);
+  assert.equal(report.etapas.lectura.mensajesAsuntoCoincidente, 2);
+  assert.equal(report.etapas.lectura.mensajesConfirmacionTexto, 2);
+  assert.equal(report.etapas.decodificacion.conHtml, 2);
+  assert.equal(report.etapas.extraccion.conEnlacesTracking, 2);
+  assert.equal(report.etapas.extraccion.conClavesExtraidas, 2);
+  assert.equal(report.etapas.extraccion.anunciosUnicos, 2);
+  assert.equal(report.etapas.extraccion.mensajesSinIdentificador, 0);
+  assert.equal(report.etapas.extraccion.anunciosPorPais.CL, 1);
+  assert.equal(report.etapas.extraccion.anunciosPorPais.CO, 1);
+
+  // Privacidad estricta: asegurar que no se fugan emails ni URLs ni IDs de estudiantes en el objeto
+  const serialized = JSON.stringify(report);
+  assert.doesNotMatch(serialized, /2466158|2466833|notificaciones@|@tusclases/i);
+});
