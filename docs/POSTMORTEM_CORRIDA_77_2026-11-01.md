@@ -37,7 +37,7 @@ El resumen `OrqCorridas` registró 47 «Fuentes completas» y 30 errores; ese re
 
 ## Intervenciones ya realizadas en GitHub (NO desplegadas)
 
-- [PR #12](https://github.com/metecondrie/student-lead-discovery-agent/pull/12): protección Gmail, pruebas de regresión, CI para ramas `fix/**`, resumen «Fuentes completas» basado en `OrqCola` y test de desacuerdo histórico; ver el HEAD y la suite verde actual.
+- [PR #12](https://github.com/metecondrie/student-lead-discovery-agent/pull/12): protección Gmail, pruebas de regresión, CI para ramas `fix/**`, resumen «Fuentes completas» verificado por coincidencia entre `OrqCola` y el último estado de `OrqFuentes`, con prueba de falso `COMPLETADO`; ver el HEAD y la suite verde actual.
 - `orqPreviewPilotoComercial()`: función de **solo lectura** que propone 4 fuentes y detecta fuentes fallidas, sin llamadas a APIs externas ni modificación de colas, triggers o configuración.
 - [Inventario de 77 fuentes](AUDITORIA_FUENTES_2026-11-01.md), [plan de piloto de cuatro](https://github.com/metecondrie/student-lead-discovery-agent/blob/fix/gmail-diagnostico-y-piloto-20261101/docs/PILOTO_COMERCIAL_2026-11-01.md).
 
