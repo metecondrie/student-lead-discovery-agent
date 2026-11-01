@@ -699,9 +699,9 @@ test('regresión punto 1: HTTP 429 en Gemini no marca el trabajo como COMPLETADO
   assert.equal(env.sheets.OrqCola.rows[1][5], 'PAUSADO_CUOTA');
   assert.equal(env.sheets.OrqHallazgos.rows.slice(1).length, 0);
 
-  // Recupera YT-01
+  // Recupera YT-01 tras reinicio de ventana RPD
   env.opts.failGeminiQuota = false;
-  env.ctx.orqTick();
+  env.ctx.orqResume();
   assert.equal(env.ctx.orqStatus().completados, 1);
 
   // 2) RSS-01 recibe 429 (incluso con evaluate definido) -> queda PAUSADO_CUOTA, no degrada ni completa
@@ -715,7 +715,7 @@ test('regresión punto 1: HTTP 429 en Gemini no marca el trabajo como COMPLETADO
 
   // Recupera RSS-01
   env.opts.failGeminiQuota = false;
-  env.ctx.orqTick();
+  env.ctx.orqResume();
   assert.equal(env.ctx.orqStatus().completados, 2);
 
   // 3) GM-429 recibe 429 -> queda PAUSADO_CUOTA, nunca ERROR_GMAIL ni COMPLETADO
@@ -729,7 +729,7 @@ test('regresión punto 1: HTTP 429 en Gemini no marca el trabajo como COMPLETADO
 
   // Recupera GM-429 y finaliza corrida
   env.opts.failGeminiQuota = false;
-  env.ctx.orqTick();
+  env.ctx.orqResume();
 
   st = env.ctx.orqStatus();
   assert.equal(st.estado, 'FINALIZADO');
@@ -801,8 +801,11 @@ test('regresión punto 2: progreso parcial por lotes conserva los lotes ya clasi
   assert.equal(savedCursor.offset, 5);
   assert.equal(savedCursor.pendingItems.length, 3);
 
-  // Reanudar corrida: debe procesar ÚNICAMENTE los 3 items del Lote 2 sin repetir Lote 1 ni llamadas a YouTube
+  // Reanudar corrida tras el reinicio del Pacífico: debe procesar ÚNICAMENTE los 3 items del Lote 2 sin repetir Lote 1 ni llamadas a YouTube
   const ytCallsBeforeResume = env.httpRequests.filter(r => r.url.includes('/youtube/v3/')).length;
+  const runBeforeResume = JSON.parse(env.props.ORQ_RUN);
+  runBeforeResume.proximaReanudacion = new Date(Date.now() - 1000).toISOString();
+  env.props.ORQ_RUN = JSON.stringify(runBeforeResume);
   env.ctx.orqTick();
 
   st = env.ctx.orqStatus();
@@ -913,10 +916,10 @@ test('regresión punto 4: distinción de cuotas RPM, TPM y RPD, reintento contro
   assert.equal(env.ctx.orqClassifyQuotaError_(429, 'Too many requests per minute (RPM)', null).type, 'RPM');
   assert.equal(env.ctx.orqClassifyQuotaError_(429, 'Too many requests per minute (RPM)', null).retryableInTick, true);
 
-  // 4c) Prevención de ciclos infinitos cuando una fuente recibe 429 permanentemente sin avanzar cursor
+  // 4c) Prevención de ciclos infinitos cuando una fuente recibe 429 RPM/TPM reiteradamente sin avanzar cursor
   const envLoop = createMockEnv({
     failGeminiQuota: true,
-    gemini429Message: 'Quota exceeded for metric: requests per day (RPD)'
+    gemini429Message: 'Too many requests per minute (RPM)'
   });
   envLoop.sheets.Config.rows.push(['ORQ_MAX_QUOTA_RETRIES', 2]);
   envLoop.ctx.orqStart(['YT-01'], 10); // Pausa #1
@@ -933,4 +936,317 @@ test('regresión punto 4: distinción de cuotas RPM, TPM y RPD, reintento contro
   assert.equal(envLoop.sheets.OrqCola.rows[1][5], 'ERROR');
   assert.ok(String(envLoop.sheets.OrqCola.rows[1][8]).includes('ERROR_CUOTA_AGOTADA_REITERADA'));
   assert.equal(envLoop.triggers.length, 0, 'elimina triggers para impedir ejecución infinita');
+});
+
+test('recuperación 1: trabajos abandonados en EN_PROCESO (bloqueo concurrente, recuperación por timeout preservando cursor y límite de reintentos)', () => {
+  const env = createMockEnv();
+  env.sheets.Config.rows.push(['ORQ_STALE_TIMEOUT_MS', 300000]); // 5 min
+  env.sheets.Config.rows.push(['ORQ_MAX_STALE_RETRIES', 2]);
+
+  // Iniciar corrida con 2 fuentes: YT-01 se completa en orqStart, YT-02 queda PENDIENTE
+  env.ctx.orqStart(['YT-01', 'YT-02'], 10);
+  const runId = env.ctx.orqStatus().id;
+
+  // Simular que YT-02 quedó interrumpido en EN_PROCESO con un cursor parcial (1 comentario ya clasificado y 1 pendiente)
+  const partialCursor = {
+    offset: 1,
+    staleRetries: 0,
+    leidos: 2,
+    repetidos: 0,
+    clasificados: 1,
+    solicitudes: 0,
+    candidatos: 0,
+    errores: 0,
+    youtube: 1,
+    gemini: 1,
+    pendingItems: [
+      {
+        id: 'yt-abandoned-pending-01',
+        url: 'https://www.youtube.com/watch?v=mDrLSOpo9ZA&lc=yt-abandoned-pending-01',
+        publishedAt: '2026-10-30T19:00:00Z',
+        text: 'Hola, busco profesor particular online de Análisis Matemático urgente.'
+      }
+    ]
+  };
+
+  // Caso A: EN_PROCESO reciente (hace 30s < 300s) -> evita ejecución concurrente
+  const recentTime = new Date(Date.now() - 30000);
+  env.sheets.OrqCola.rows[2] = [
+    runId, 'JOB-2', 'YT-02', 'YouTube', 'youtube_canales',
+    'EN_PROCESO', 1, JSON.stringify(partialCursor), '', recentTime, recentTime
+  ];
+  const geminiCallsBeforeConcurrent = env.stats.gem;
+  env.ctx.orqTick();
+  assert.equal(env.sheets.OrqCola.rows[2][5], 'EN_PROCESO', 'no toca un trabajo EN_PROCESO dentro de su ventana activa');
+  assert.equal(env.stats.gem, geminiCallsBeforeConcurrent, 'no ejecuta llamadas concurrentes');
+  assert.ok(env.triggers.length > 0, 'mantiene trigger programado para comprobar más tarde');
+
+  // Caso B: EN_PROCESO vencido/abandonado (hace 10 min > 5 min) -> recupera a PENDIENTE preservando cursor y procesa solo lo pendiente
+  const expiredTime = new Date(Date.now() - 600000);
+  env.sheets.OrqCola.rows[2][10] = expiredTime;
+  const ytCallsBeforeRecovery = env.httpRequests.filter(r => r.url.includes('/youtube/v3/')).length;
+
+  env.ctx.orqTick();
+  const stAfterRecovery = env.ctx.orqStatus();
+  assert.equal(stAfterRecovery.estado, 'FINALIZADO');
+  assert.equal(stAfterRecovery.completados, 2);
+  assert.equal(env.sheets.OrqCola.rows[2][5], 'COMPLETADO');
+  const ytCallsAfterRecovery = env.httpRequests.filter(r => r.url.includes('/youtube/v3/')).length;
+  assert.equal(ytCallsAfterRecovery, ytCallsBeforeRecovery, 'preservó el cursor sin repetir llamadas a YouTube');
+  assert.ok(
+    env.sheets.OrqHallazgos.rows.some(r => r[4] === 'yt-abandoned-pending-01' && r[11] === 'REVISAR'),
+    'clasificó y guardó el candidato pendiente del cursor recuperado'
+  );
+
+  // Caso C: Si un trabajo EN_PROCESO supera ORQ_MAX_STALE_RETRIES (2), se marca como ERROR y no bloquea la cola
+  const envMax = createMockEnv();
+  envMax.sheets.Config.rows.push(['ORQ_STALE_TIMEOUT_MS', 300000]);
+  envMax.sheets.Config.rows.push(['ORQ_MAX_STALE_RETRIES', 2]);
+  envMax.ctx.orqStart(['YT-01', 'YT-02'], 10);
+  const runIdMax = envMax.ctx.orqStatus().id;
+  const exhaustedCursor = { offset: 2, staleRetries: 2, leidos: 5, clasificados: 2, pendingItems: [{ id: 'yt-stuck' }] };
+  envMax.sheets.OrqCola.rows[2] = [
+    runIdMax, 'JOB-2', 'YT-02', 'YouTube', 'youtube_canales',
+    'EN_PROCESO', 3, JSON.stringify(exhaustedCursor), '', expiredTime, expiredTime
+  ];
+
+  envMax.ctx.orqTick();
+  const stMax = envMax.ctx.orqStatus();
+  assert.equal(stMax.estado, 'FINALIZADO');
+  assert.equal(stMax.completados, 1);
+  assert.equal(stMax.fallidos, 1);
+  assert.equal(envMax.sheets.OrqCola.rows[2][5], 'ERROR');
+  assert.ok(String(envMax.sheets.OrqCola.rows[2][8]).includes('ERROR_TRABAJO_ABANDONADO'));
+  assert.equal(JSON.parse(envMax.sheets.OrqCola.rows[2][7]).offset, 2, 'conserva el cursor para diagnóstico');
+});
+
+test('recuperación 2: respuestas incompletas de Gemini (reintentos acotados sin repetir exitosos y estado INCOMPLETO_RECUPERABLE con elementos afectados)', () => {
+  // 2a) Gemini devuelve solo 1 de 2 elementos en el primer intento; en el reintento acotado clasifica el faltante sin repetir el primero
+  let geminiCallCount = 0;
+  const batchPayloads = [];
+  const env = createMockEnv({
+    onGeminiCall: (url, options) => {
+      geminiCallCount++;
+      const body = JSON.parse(options.payload);
+      const items = JSON.parse(body.contents[0].parts[0].text);
+      batchPayloads.push(items.map(i => i.id));
+
+      if (geminiCallCount === 1) {
+        // Primera llamada: omite yt-comm-02 (respuesta incompleta)
+        const onlyFirst = [
+          {
+            id: items[0].id,
+            es_solicitud_clases: true,
+            destinatario: 'pedido_abierto',
+            contactabilidad: 'canal_publico_permitido',
+            oportunidad_comercial_alejo: true,
+            confianza: 0.95,
+            materia: 'Álgebra',
+            nivel: 'CBC',
+            resumen: 'Busca clases de Álgebra'
+          }
+        ];
+        return {
+          getResponseCode: () => 200,
+          getContentText: () => JSON.stringify({
+            candidates: [{ content: { parts: [{ text: JSON.stringify(onlyFirst) }] } }]
+          })
+        };
+      }
+      return null; // Segunda llamada: devuelve todos los elementos solicitados
+    }
+  });
+
+  // Paso 1 (orqStart): clasifica yt-comm-01 y deja yt-comm-02 PENDIENTE para reintento acotado (no ERROR)
+  let st = env.ctx.orqStart(['YT-01'], 10);
+  assert.equal(st.estado, 'EJECUTANDO');
+  assert.equal(st.pendientes, 1);
+  assert.equal(st.fallidos, 0);
+  assert.equal(env.sheets.OrqCola.rows[1][5], 'PENDIENTE', 'queda PENDIENTE para reintento acotado, no ERROR');
+  assert.ok(String(env.sheets.OrqCola.rows[1][8]).includes('yt-comm-02'), 'identifica el elemento pendiente');
+  assert.equal(env.sheets.OrqHallazgos.rows.slice(1).length, 1, 'guardó inmediatamente yt-comm-01 ya clasificado');
+
+  // Paso 2 (orqTick): reintenta ÚNICAMENTE yt-comm-02 sin volver a enviar yt-comm-01
+  env.ctx.orqTick();
+  st = env.ctx.orqStatus();
+  assert.equal(st.estado, 'FINALIZADO');
+  assert.equal(st.completados, 1);
+  assert.equal(st.fallidos, 0);
+  assert.deepEqual(batchPayloads[0], ['yt-comm-01', 'yt-comm-02']);
+  assert.deepEqual(batchPayloads[1], ['yt-comm-02'], 'no repitió la clasificación exitosa de yt-comm-01');
+  assert.equal(env.sheets.OrqHallazgos.rows.slice(1).length, 2, 'ambos comentarios quedaron clasificados sin duplicados');
+
+  // 2b) Si se agotan los reintentos acotados, deja el trabajo en INCOMPLETO_RECUPERABLE identificando los elementos afectados y permite recuperar con orqResume
+  let omitAlways = true;
+  const envRec = createMockEnv({
+    onGeminiCall: (url, options) => {
+      const body = JSON.parse(options.payload);
+      const items = JSON.parse(body.contents[0].parts[0].text);
+      if (omitAlways) {
+        const partial = items.filter(i => i.id !== 'yt-comm-02').map(i => ({
+          id: i.id,
+          es_solicitud_clases: true,
+          destinatario: 'pedido_abierto',
+          contactabilidad: 'canal_publico_permitido',
+          oportunidad_comercial_alejo: true,
+          confianza: 0.9,
+          materia: 'Álgebra',
+          nivel: 'CBC',
+          resumen: 'OK'
+        }));
+        return {
+          getResponseCode: () => 200,
+          getContentText: () => JSON.stringify({
+            candidates: [{ content: { parts: [{ text: JSON.stringify(partial) }] } }]
+          })
+        };
+      }
+      return null;
+    }
+  });
+  envRec.sheets.Config.rows.push(['ORQ_MAX_INCOMPLETE_RETRIES', 1]);
+
+  // Intento inicial -> clasifica yt-comm-01, falta yt-comm-02 (reintento 1/1 -> PENDIENTE)
+  envRec.ctx.orqStart(['YT-01'], 10);
+  assert.equal(envRec.sheets.OrqCola.rows[1][5], 'PENDIENTE');
+
+  // Reintento 1 -> vuelve a faltar yt-comm-02 -> agota ORQ_MAX_INCOMPLETE_RETRIES (1) y pasa a INCOMPLETO_RECUPERABLE
+  envRec.ctx.orqTick();
+  let stRec = envRec.ctx.orqStatus();
+  assert.equal(stRec.estado, 'INCOMPLETO_RECUPERABLE');
+  assert.equal(stRec.fallidos, 0, 'no marca el trabajo como ERROR definitivo');
+  assert.equal(stRec.recuperables, 1);
+  assert.equal(envRec.sheets.OrqCola.rows[1][5], 'INCOMPLETO_RECUPERABLE');
+  assert.equal(envRec.sheets.OrqFuentes.rows[1][5], 'INCOMPLETO_RECUPERABLE');
+  assert.ok(String(envRec.sheets.OrqCola.rows[1][8]).includes('yt-comm-02'), 'identifica explícitamente el ID afectado en OrqCola');
+  assert.ok(String(envRec.sheets.OrqFuentes.rows[1][15]).includes('yt-comm-02'), 'identifica explícitamente el ID afectado en OrqFuentes');
+  const recCursor = JSON.parse(envRec.sheets.OrqCola.rows[1][7]);
+  assert.deepEqual(recCursor.missingIds, ['yt-comm-02']);
+  assert.equal(recCursor.pendingItems.length, 1);
+
+  // Al recuperar mediante orqResume(), procesa el elemento pendiente y finaliza como COMPLETADO
+  omitAlways = false;
+  const resumeOut = envRec.ctx.orqResume();
+  assert.equal(resumeOut.ok, true);
+  stRec = envRec.ctx.orqStatus();
+  assert.equal(stRec.estado, 'FINALIZADO');
+  assert.equal(stRec.completados, 1);
+  assert.equal(stRec.recuperables, 0);
+  assert.equal(envRec.sheets.OrqHallazgos.rows.slice(1).length, 2);
+});
+
+test('recuperación 3: cuota diaria real RPD programada tras reinicio del Pacífico (sin agotar 5 pausas horarias) y métricas limpias en corrida de 77 fuentes', () => {
+  // 3a) Cuando Google responde HTTP 429 por RPD, programa después de medianoche del Pacífico y no agota el contador de 5 pausas
+  const envRpd = createMockEnv({
+    failGeminiQuota: true,
+    gemini429Message: 'Quota exceeded for metric: GenerateRequestsPerDayPerProjectPerModel (per day RPD)'
+  });
+  envRpd.sheets.Config.rows.push(['ORQ_MAX_QUOTA_RETRIES', 2]);
+
+  envRpd.ctx.orqStart(['YT-01'], 10);
+  let stRpd = envRpd.ctx.orqStatus();
+  assert.equal(stRpd.estado, 'PAUSADO_CUOTA');
+
+  const runData = JSON.parse(envRpd.props.ORQ_RUN);
+  assert.equal(runData.tipoCuota, 'RPD');
+  assert.equal(runData.origenCuota, 'HTTP_429_RPD');
+
+  // Verificar que proximaReanudacion y el trigger coinciden con el reinicio del Pacífico (00:05 America/Los_Angeles), no 1 hora fija
+  const expectedPacific = envRpd.ctx.orqNextPacificReset_(new Date());
+  const scheduledDiff = Math.abs(new Date(runData.proximaReanudacion).getTime() - expectedPacific.getTime());
+  assert.ok(scheduledDiff < 15000, 'programa la reanudación para después del reinicio de cuota del Pacífico');
+  assert.equal(envRpd.triggers.length, 1);
+  assert.ok(Math.abs(envRpd.triggers[0].ms - (expectedPacific.getTime() - Date.now())) < 15000, 'trigger programado al reinicio del Pacífico');
+
+  // Diferenciar de RPM/TPM, que programan espera corta (1 min = 60000 ms)
+  const envRpm = createMockEnv({
+    failGeminiQuota: true,
+    gemini429Message: 'Too many requests per minute (RPM)'
+  });
+  envRpm.ctx.orqStart(['YT-01'], 10);
+  assert.equal(JSON.parse(envRpm.props.ORQ_RUN).tipoCuota, 'RPM');
+  assert.ok(envRpm.triggers[0].ms <= 65000, 'RPM programa espera corta (~60s)');
+
+  // Simular 6 disparos horarios de orqTick antes del reinicio del Pacífico:
+  // NO debe llamar a Gemini, NO debe incrementar intentos ni agotar el contador de 5 pausas
+  const geminiHttpBefore = envRpd.httpRequests.filter(r => r.url.includes(':generateContent')).length;
+  for (let h = 0; h < 6; h++) {
+    envRpd.ctx.orqTick();
+  }
+  const geminiHttpAfter = envRpd.httpRequests.filter(r => r.url.includes(':generateContent')).length;
+  assert.equal(geminiHttpAfter, geminiHttpBefore, 'no reintenta cada hora antes del reinicio del Pacífico');
+  assert.equal(envRpd.ctx.orqStatus().estado, 'PAUSADO_CUOTA', 'sigue en PAUSADO_CUOTA sin caer en ERROR_CUOTA_AGOTADA_REITERADA');
+  assert.equal(envRpd.sheets.OrqCola.rows[1][5], 'PAUSADO_CUOTA');
+
+  // Incluso si el reloj alcanza proximaReanudacion varias veces y Google aún responde 429 RPD, RPD no agota el tope de 5 pausas
+  for (let d = 0; d < 5; d++) {
+    const r = JSON.parse(envRpd.props.ORQ_RUN);
+    r.proximaReanudacion = new Date(Date.now() - 1000).toISOString();
+    envRpd.props.ORQ_RUN = JSON.stringify(r);
+    envRpd.ctx.orqTick();
+    assert.equal(envRpd.ctx.orqStatus().estado, 'PAUSADO_CUOTA');
+  }
+
+  // Simular llegada del reinicio del Pacífico y restablecimiento de cuota en Google
+  const reachedRun = JSON.parse(envRpd.props.ORQ_RUN);
+  reachedRun.proximaReanudacion = new Date(Date.now() - 1000).toISOString();
+  envRpd.props.ORQ_RUN = JSON.stringify(reachedRun);
+  envRpd.opts.failGeminiQuota = false;
+  envRpd.ctx.orqTick();
+  stRpd = envRpd.ctx.orqStatus();
+  assert.equal(stRpd.estado, 'FINALIZADO');
+  assert.equal(stRpd.completados, 1);
+
+  // 3b) Comprobar que múltiples registros históricos PAUSADO_CUOTA no inflen las métricas de la corrida existente de 77 fuentes
+  const env77 = createMockEnv();
+  const ss77 = env77.ctx.SpreadsheetApp.openById(STAGING);
+  const shCola77 = ss77.insertSheet('OrqCola');
+  shCola77.rows.push(['Run ID', 'Job ID', 'Fuente ID', 'Plataforma', 'Conector', 'Estado', 'Intentos', 'Cursor', 'Error', 'Creado', 'Actualizado']);
+  const shFuentes77 = ss77.insertSheet('OrqFuentes');
+  shFuentes77.rows.push(['Run ID', 'Fecha', 'Fuente ID', 'Nombre', 'Conector', 'Estado', 'Leidos', 'Repetidos', 'Clasificados', 'Solicitudes', 'Candidatos', 'Errores', 'YouTube API', 'Gemini API', 'Duracion s', 'Mensaje']);
+  const runId77 = 'ORQ-20260417-205047-9caaf9';
+  env77.props.ORQ_RUN = JSON.stringify({
+    id: runId77,
+    estado: 'PAUSADO_CUOTA',
+    cursor: 3,
+    total: 77,
+    inicio: '2026-04-17T23:50:47.000Z',
+    maxComments: 15,
+    mensaje: 'Límite de cuota alcanzado.'
+  });
+
+  // Poblar OrqCola con 77 fuentes: 3 COMPLETADO, 1 PAUSADO_CUOTA y 73 PENDIENTE
+  for (let i = 1; i <= 77; i++) {
+    const qSt = i <= 3 ? 'COMPLETADO' : (i === 4 ? 'PAUSADO_CUOTA' : 'PENDIENTE');
+    env77.sheets.OrqCola.rows.push([
+      runId77, 'JOB-' + i, 'SRC-' + i, 'YouTube', 'youtube_canales', qSt, 1, '', '', new Date(), new Date()
+    ]);
+  }
+
+  // Poblar OrqFuentes con 3 fuentes exitosas + 25 filas históricas PAUSADO_CUOTA (con errores=1 como generaba el código anterior)
+  for (let i = 1; i <= 3; i++) {
+    env77.sheets.OrqFuentes.rows.push([
+      runId77, new Date(), 'SRC-' + i, 'Canal ' + i, 'youtube_canales', 'OK',
+      10, 0, 10, 2, 1, 0, 2, 2, 4.5, ''
+    ]);
+  }
+  for (let p = 0; p < 25; p++) {
+    env77.sheets.OrqFuentes.rows.push([
+      runId77, new Date(), 'SRC-4', 'Canal 4', 'youtube_canales', 'PAUSADO_CUOTA',
+      0, 0, 0, 0, 0, 1, 0, 0, 0.2, 'PAUSADO_CUOTA: Límite diario alcanzado'
+    ]);
+  }
+
+  const st77 = env77.ctx.orqStatus();
+  assert.equal(st77.total, 77);
+  assert.equal(st77.completados, 3);
+  assert.equal(st77.pausados, 1);
+  assert.equal(st77.pendientes, 73);
+  assert.equal(st77.fallidos, 0);
+  assert.equal(st77.metricas.fuentes, 3, 'solo las 3 fuentes completadas cuentan en metricas.fuentes');
+  assert.equal(st77.metricas.leidos, 30);
+  assert.equal(st77.metricas.clasificados, 30);
+  assert.equal(st77.metricas.candidatos, 3);
+  assert.equal(st77.metricas.errores, 0, 'las 25 filas históricas PAUSADO_CUOTA con errores=1 no inflan metricas.errores');
+  assert.equal(st77.metricas.detalles.length, 3, 'las filas históricas PAUSADO_CUOTA vacías no contaminan detalles');
 });

@@ -146,6 +146,31 @@ function orqScheduleAt_(dateObj) {
   ScriptApp.newTrigger('orqTick').timeBased().after(ms).create();
 }
 
+/**
+ * Calcula el próximo reinicio diario de cuota de Gemini (medianoche del Pacífico, America/Los_Angeles, + 5 min de margen).
+ */
+function orqNextPacificReset_(nowDate) {
+  var now = (nowDate instanceof Date && !isNaN(nowDate.getTime())) ? nowDate : new Date();
+  try {
+    var laDate = new Date(now.toLocaleString('en-US', { timeZone: 'America/Los_Angeles' }));
+    if (!isNaN(laDate.getTime())) {
+      var nextMidnightLa = new Date(laDate.getTime());
+      nextMidnightLa.setHours(24, 5, 0, 0); // 00:05 PT del día siguiente
+      var diffMs = nextMidnightLa.getTime() - laDate.getTime();
+      if (diffMs > 0 && diffMs <= 90000000) {
+        return new Date(now.getTime() + diffMs);
+      }
+    }
+  } catch (e) {}
+  // Fallback PST (08:05 UTC)
+  var fb = new Date(now.getTime());
+  fb.setUTCHours(8, 5, 0, 0);
+  if (fb.getTime() <= now.getTime()) {
+    fb = new Date(fb.getTime() + 86400000);
+  }
+  return fb;
+}
+
 function orqSources_(ss) {
   // LECTURA PURA: NUNCA sincroniza, muta ni borra la hoja Fuentes en consultas de estado o ticks
   var sh = ss.getSheetByName('Fuentes');
@@ -252,7 +277,7 @@ function orqSeen_(ss) {
   return known;
 }
 
-/** Totales agregados de la corrida diferenciando completados, fallidos, pendientes y pausados */
+/** Totales agregados de la corrida diferenciando completados, fallidos, pendientes, pausados y recuperables */
 function orqTotals_(ss, runId) {
   var res = {
     fuentes: 0,
@@ -260,6 +285,7 @@ function orqTotals_(ss, runId) {
     fallidos: 0,
     pendientes: 0,
     pausados: 0,
+    recuperables: 0,
     omitidos: 0,
     leidos: 0,
     repetidos: 0,
@@ -271,13 +297,38 @@ function orqTotals_(ss, runId) {
     gemini: 0,
     detalles: []
   };
+
+  // Consolidar OrqFuentes por fuenteId para que múltiples registros históricos
+  // (p. ej. PAUSADO_CUOTA repetidos en la corrida de 77 fuentes) nunca inflen las métricas.
+  var byFuente = {};
+  var fuenteOrder = [];
   orqRows_(orqSheet_(ss, 'OrqFuentes')).forEach(function(r) {
     if (String(r[0]) !== runId) return;
+    var fId = String(r[2] || '');
+    if (!fId) return;
     var st = String(r[5] || '');
-    var isPaused = (st === 'PAUSADO_CUOTA');
+    var isPaused = (st === 'PAUSADO_CUOTA' || st === 'PENDIENTE_REINTENTO');
+    var hasProgress = (Number(r[6]) || 0) > 0 || (Number(r[8]) || 0) > 0 || (Number(r[10]) || 0) > 0 || (Number(r[12]) || 0) > 0 || (Number(r[13]) || 0) > 0;
+
+    // Ignorar registros históricos PAUSADO_CUOTA sin progreso parcial (evita inflar errores o conteos)
+    if (isPaused && !hasProgress) {
+      return;
+    }
+
+    if (!byFuente[fId]) {
+      fuenteOrder.push(fId);
+    }
+    byFuente[fId] = r;
+  });
+
+  fuenteOrder.forEach(function(fId) {
+    var r = byFuente[fId];
+    var st = String(r[5] || '');
+    var isPaused = (st === 'PAUSADO_CUOTA' || st === 'PENDIENTE_REINTENTO');
+    var isRecoverable = (st === 'INCOMPLETO_RECUPERABLE');
     var isErr = /^ERROR/i.test(st);
     var isOmit = /^OMITIDO/i.test(st);
-    var isSuccess = !isPaused && !isErr && !isOmit;
+    var isSuccess = !isPaused && !isRecoverable && !isErr && !isOmit;
 
     // Solo las fuentes que finalizaron exitosamente cuentan como procesadas/completas.
     if (isSuccess) {
@@ -289,27 +340,23 @@ function orqTotals_(ss, runId) {
     res.clasificados += Number(r[8]) || 0;
     res.solicitudes += Number(r[9]) || 0;
     res.candidatos += Number(r[10]) || 0;
-    if (!isPaused) {
-      res.errores += Number(r[11]) || (isErr ? 1 : 0);
-    } else {
-      res.errores += Number(r[11]) || 0;
-    }
+    // Las pausas por cuota o estados recuperables nunca se contabilizan como errores de fuente.
+    var rowErr = (isPaused || isRecoverable) ? 0 : (Number(r[11]) || (isErr ? 1 : 0));
+    res.errores += rowErr;
     res.youtube += Number(r[12]) || 0;
     res.gemini += Number(r[13]) || 0;
 
-    if (!isPaused || (Number(r[6]) || Number(r[8]) || Number(r[10]))) {
-      res.detalles.push({
-        fuenteId: String(r[2]),
-        nombre: String(r[3]),
-        conector: String(r[4]),
-        estado: st,
-        leidos: Number(r[6]) || 0,
-        clasificados: Number(r[8]) || 0,
-        candidatos: Number(r[10]) || 0,
-        errores: isPaused ? (Number(r[11]) || 0) : (Number(r[11]) || (isErr ? 1 : 0)),
-        duracion: Number(r[14]) || 0
-      });
-    }
+    res.detalles.push({
+      fuenteId: String(r[2]),
+      nombre: String(r[3]),
+      conector: String(r[4]),
+      estado: st,
+      leidos: Number(r[6]) || 0,
+      clasificados: Number(r[8]) || 0,
+      candidatos: Number(r[10]) || 0,
+      errores: rowErr,
+      duracion: Number(r[14]) || 0
+    });
   });
 
   if (ss.getSheetByName('OrqCola')) {
@@ -319,6 +366,10 @@ function orqTotals_(ss, runId) {
       if (qState === 'COMPLETADO') res.completados++;
       else if (qState === 'ERROR') res.fallidos++;
       else if (qState === 'PAUSADO_CUOTA') res.pausados++;
+      else if (qState === 'INCOMPLETO_RECUPERABLE') {
+        res.recuperables++;
+        res.pausados++;
+      }
       else if (qState === 'OMITIDO') res.omitidos++;
       else if (qState === 'PENDIENTE' || qState === 'EN_PROCESO') res.pendientes++;
     });
@@ -336,7 +387,7 @@ function orqUpdateRunRow_(ss, run) {
   }
   if (idx < 0) return;
   var t = orqTotals_(ss, run.id);
-  var finished = ['FINALIZADO', 'DETENIDO', 'ERROR', 'PAUSADO_CUOTA'].indexOf(run.estado) >= 0;
+  var finished = ['FINALIZADO', 'DETENIDO', 'ERROR', 'PAUSADO_CUOTA', 'INCOMPLETO_RECUPERABLE'].indexOf(run.estado) >= 0;
   var now = new Date();
   var secs = Math.round((now.getTime() - new Date(run.inicio).getTime()) / 100) / 10;
   sh.getRange(idx, 1, 1, 15).setValues([[
@@ -467,6 +518,7 @@ function orqStop() {
 /**
  * MOTOR DE PASO AUTÓNOMO (orqTick):
  * - Invocado al iniciar y reanudado mediante triggers temporales.
+ * - Recupera trabajos abandonados (EN_PROCESO vencidos) evitando ejecuciones concurrentes.
  * - Recupera el próximo trabajo PENDIENTE de la cola OrqCola.
  * - Ejecuta el conector correspondiente y persiste resultados.
  * - Programa el siguiente paso hasta completar todas las fuentes.
@@ -487,15 +539,19 @@ function orqTick() {
       var resumeAt = run.proximaReanudacion ? new Date(run.proximaReanudacion).getTime() : 0;
       var gcap = typeof checkGeminiQuota_ === 'function' ?
         checkGeminiQuota_(p, { GEMINI_MAX_DAILY_CALLS: Number(cfg.GEMINI_MAX_DAILY_CALLS) || 20 }) : { allowed: true, count: 0, max: 20 };
-      var quotaReset = gcap.allowed && (gcap.count === 0 || (gcap.max - (gcap.count || 0)) >= 1);
-      // El vencimiento del temporizador no restablece una cuota agotada.
-      // Solo continuar cuando el contador real permita nuevas llamadas.
+      var localQuotaOk = gcap.allowed && (gcap.count === 0 || (gcap.max - (gcap.count || 0)) >= 1);
+
+      // Si Google respondió HTTP 429 por límite diario real (RPD), no reintentar antes del reinicio del Pacífico.
+      var waitingPacificRpd = (run.tipoCuota === 'RPD' && run.origenCuota === 'HTTP_429_RPD' && resumeAt > 0 && nowMs < resumeAt);
+      var quotaReset = localQuotaOk && !waitingPacificRpd;
+
       if (quotaReset) {
         run.estado = 'EJECUTANDO';
         run.mensaje = 'Cuota restablecida. Reanudando búsqueda multifuente...';
         delete run.proximaReanudacion;
         delete run.motivoPausa;
         delete run.tipoCuota;
+        delete run.origenCuota;
 
         // Resetear trabajos en OrqCola con estado PAUSADO_CUOTA a PENDIENTE preservando Cursor
         var shColaResume = orqSheet_(ss, 'OrqCola');
@@ -512,9 +568,15 @@ function orqTick() {
         orqSaveRun_(run);
         orqUpdateRunRow_(ss, run);
       } else {
-        // Aún no es seguro reanudar; mantener trigger programado
-        var waitTarget = new Date(Math.max(nowMs + 3600000, resumeAt || 0));
-        orqScheduleAt_(waitTarget);
+        // Aún no es seguro reanudar; mantener trigger programado según tipo de cuota (Pacífico para RPD vs espera corta para RPM/TPM)
+        var nextCheckDate;
+        if (run.tipoCuota === 'RPD') {
+          var pacificResetMs = orqNextPacificReset_(new Date(nowMs)).getTime();
+          nextCheckDate = new Date(Math.max(pacificResetMs, resumeAt || 0));
+        } else {
+          nextCheckDate = new Date(Math.max(nowMs + 60000, resumeAt || 0));
+        }
+        orqScheduleAt_(nextCheckDate);
         return;
       }
     }
@@ -535,9 +597,77 @@ function orqTick() {
       return;
     }
 
-    // Buscar próximo trabajo en OrqCola
     var shCola = orqSheet_(ss, 'OrqCola');
     var colaRows = orqRows_(shCola);
+
+    // 1. Control de trabajos EN_PROCESO: evitar ejecución concurrente y recuperar trabajos abandonados tras tiempo máximo
+    var staleTimeoutMs = (cfg && Number(cfg.ORQ_STALE_TIMEOUT_MS) > 0) ? Number(cfg.ORQ_STALE_TIMEOUT_MS) : 360000;
+    var maxStaleRetries = (cfg && typeof cfg.ORQ_MAX_STALE_RETRIES !== 'undefined') ? Number(cfg.ORQ_MAX_STALE_RETRIES) : 3;
+    var colaMutated = false;
+
+    for (var si = 0; si < colaRows.length; si++) {
+      var sRow = colaRows[si];
+      if (String(sRow[0]) !== run.id || String(sRow[5]) !== 'EN_PROCESO') continue;
+
+      var staleCur = null;
+      if (sRow[7]) {
+        try { staleCur = JSON.parse(String(sRow[7])); } catch(e) {}
+      }
+      var rawUpd = sRow[10] || (staleCur && staleCur.startedAt) || sRow[9];
+      var updatedMs = rawUpd ? new Date(rawUpd).getTime() : 0;
+      var elapsedMs = updatedMs > 0 && !isNaN(updatedMs) ? (Date.now() - updatedMs) : staleTimeoutMs;
+
+      if (elapsedMs < staleTimeoutMs) {
+        // Hay un trabajo activamente EN_PROCESO dentro de la ventana de tiempo máximo: evitar ejecución concurrente
+        orqSchedule_();
+        return;
+      }
+
+      // Trabajo abandonado (superó staleTimeoutMs)
+      var staleRetries = (staleCur && Number(staleCur.staleRetries)) || 0;
+      if (staleRetries < maxStaleRetries) {
+        if (!staleCur || typeof staleCur !== 'object') staleCur = { offset: 0 };
+        staleCur.staleRetries = staleRetries + 1;
+        var recMsg = ('RECUPERADO_ABANDONADO (' + staleCur.staleRetries + '/' + maxStaleRetries + '): Reintento tras interrupción en EN_PROCESO').slice(0, 160);
+        shCola.getRange(si + 2, 1, 1, 11).setValues([[
+          String(sRow[0]), String(sRow[1]), String(sRow[2]), String(sRow[3]), String(sRow[4]),
+          'PENDIENTE', Number(sRow[6]) || 0, JSON.stringify(staleCur), recMsg, sRow[9] || new Date(), new Date()
+        ]]);
+        colaMutated = true;
+      } else {
+        var abMsg = ('ERROR_TRABAJO_ABANDONADO: Excedió máximo de reintentos (' + maxStaleRetries + ') tras interrupción en EN_PROCESO').slice(0, 160);
+        var abCurStr = staleCur ? JSON.stringify(staleCur) : String(sRow[7] || '');
+        shCola.getRange(si + 2, 1, 1, 11).setValues([[
+          String(sRow[0]), String(sRow[1]), String(sRow[2]), String(sRow[3]), String(sRow[4]),
+          'ERROR', Number(sRow[6]) || 0, abCurStr, abMsg, sRow[9] || new Date(), new Date()
+        ]]);
+        orqRecordFuente_(ss, {
+          runId: run.id,
+          fecha: new Date(),
+          fuenteId: String(sRow[2]),
+          nombre: String(sRow[2]),
+          conector: String(sRow[4]),
+          estado: 'ERROR_TRABAJO_ABANDONADO',
+          leidos: staleCur ? (Number(staleCur.leidos) || 0) : 0,
+          repetidos: staleCur ? (Number(staleCur.repetidos) || 0) : 0,
+          clasificados: staleCur ? (Number(staleCur.clasificados) || 0) : 0,
+          solicitudes: staleCur ? (Number(staleCur.solicitudes) || 0) : 0,
+          candidatos: staleCur ? (Number(staleCur.candidatos) || 0) : 0,
+          errores: 1,
+          youtube: staleCur ? (Number(staleCur.youtube) || 0) : 0,
+          gemini: staleCur ? (Number(staleCur.gemini) || 0) : 0,
+          duracion: 0,
+          mensaje: abMsg
+        });
+        colaMutated = true;
+      }
+    }
+
+    if (colaMutated) {
+      colaRows = orqRows_(shCola);
+    }
+
+    // 2. Buscar próximo trabajo PENDIENTE en OrqCola
     var jobIdx = -1, job = null;
     for (var i = 0; i < colaRows.length; i++) {
       var row = colaRows[i];
@@ -564,19 +694,36 @@ function orqTick() {
     }
 
     if (!job) {
-      // Todos los trabajos completados
-      run.estado = 'FINALIZADO';
-      run.mensaje = 'Búsqueda multifuente completada con éxito.';
+      var checkRows = colaRows.filter(function(r) { return String(r[0]) === run.id; });
+      var recCount = checkRows.filter(function(r) { return String(r[5]) === 'INCOMPLETO_RECUPERABLE'; }).length;
+      var failCount = checkRows.filter(function(r) { return String(r[5]) === 'ERROR'; }).length;
+      var compCount = checkRows.filter(function(r) { return String(r[5]) === 'COMPLETADO'; }).length;
+      run.cursor = compCount;
+      run.completados = compCount;
+      run.fallidos = failCount;
+      run.recuperables = recCount;
+      run.pausados = recCount;
+      run.pendientes = 0;
+      if (recCount > 0) {
+        run.estado = 'INCOMPLETO_RECUPERABLE';
+        run.mensaje = 'Búsqueda con ' + recCount + ' fuente(s) en estado INCOMPLETO_RECUPERABLE.';
+      } else {
+        run.estado = 'FINALIZADO';
+        run.mensaje = failCount > 0 ?
+          ('Búsqueda finalizada: ' + compCount + ' completadas, ' + failCount + ' con error.') :
+          'Búsqueda multifuente completada con éxito.';
+      }
       orqSaveRun_(run);
       orqUpdateRunRow_(ss, run);
       orqRemoveTriggers_();
       return;
     }
 
-    // Marcar EN_PROCESO preservando las 11 columnas
+    // Marcar EN_PROCESO preservando las 11 columnas y timestamp de inicio
+    var inProcNow = new Date();
     shCola.getRange(job.rowIdx, 1, 1, 11).setValues([[
       job.runId, job.jobId, job.sourceId, job.platform, job.connector,
-      'EN_PROCESO', job.attempts + 1, job.cursorRaw, '', job.created, new Date()
+      'EN_PROCESO', job.attempts + 1, job.cursorRaw, '', job.created, inProcNow
     ]]);
 
     // Cargar detalles de la fuente
@@ -623,29 +770,56 @@ function orqTick() {
       ]]);
     } catch(err) {
       var errMsg = String(err && err.message || err).slice(0, 160);
-      var isQuota = orqIsQuotaError_(err);
+      var isIncomplete = !!(err && err.isIncomplete);
+      var isQuota = !isIncomplete && orqIsQuotaError_(err);
       var qInfo = isQuota ? orqClassifyQuotaError_(err && err.httpStatus || 429, errMsg, null) : null;
+      var qType = qInfo ? qInfo.type : (err && err.quotaType ? err.quotaType : 'RPD');
 
       var prevOffset = (job.cursor && Number(job.cursor.offset)) || 0;
       var newOffset = (err && err.cursor && Number(err.cursor.offset)) || prevOffset;
       var madeProgress = newOffset > prevOffset;
       var prevPauseCount = (job.cursor && Number(job.cursor.pauseCount)) || 0;
-      var pauseCount = isQuota ? (madeProgress ? 1 : prevPauseCount + 1) : 0;
+
+      // Para RPD no se agota el contador de 5 pausas horarias; el tope aplica a bloqueos repetidos RPM/TPM sin avance
+      var pauseCount = isQuota ? (qType === 'RPD' ? prevPauseCount : (madeProgress ? 1 : prevPauseCount + 1)) : 0;
       var maxQuotaPauses = Number(cfg.ORQ_MAX_QUOTA_RETRIES) || 5;
 
-      // Evitar ciclos infinitos si una fuente falla reiteradamente por cuota sin avanzar el cursor de lotes
-      if (isQuota && pauseCount > maxQuotaPauses) {
+      if (isQuota && qType !== 'RPD' && pauseCount > maxQuotaPauses) {
         isQuota = false;
         errMsg = ('ERROR_CUOTA_AGOTADA_REITERADA: ' + errMsg).slice(0, 160);
       }
 
       var finalState = isQuota ? 'PAUSADO_CUOTA' : 'ERROR';
+      var fuenteState = finalState;
       var cursorObj = (err && err.cursor) ? err.cursor : (job.cursor ? job.cursor : null);
-      if (cursorObj) {
-        cursorObj.pauseCount = pauseCount;
-      } else if (isQuota) {
-        cursorObj = { offset: 0, pauseCount: pauseCount };
+
+      if (isIncomplete) {
+        var maxIncRetries = (cfg && typeof cfg.ORQ_MAX_INCOMPLETE_RETRIES !== 'undefined') ? Number(cfg.ORQ_MAX_INCOMPLETE_RETRIES) : 2;
+        var prevIncRetries = (job.cursor && Number(job.cursor.incompleteRetries)) || 0;
+        var incRetries = prevIncRetries + 1;
+        var missingList = (err.missingIds && err.missingIds.length) ? err.missingIds.join(', ') : 'sin_id';
+
+        if (!cursorObj || typeof cursorObj !== 'object') cursorObj = { offset: newOffset };
+        cursorObj.incompleteRetries = incRetries;
+        cursorObj.missingIds = err.missingIds || [];
+
+        if (incRetries <= maxIncRetries) {
+          finalState = 'PENDIENTE';
+          fuenteState = 'PENDIENTE_REINTENTO';
+          errMsg = ('REINTENTO_INCOMPLETO (' + incRetries + '/' + maxIncRetries + '): Elementos pendientes [' + missingList + ']').slice(0, 160);
+        } else {
+          finalState = 'INCOMPLETO_RECUPERABLE';
+          fuenteState = 'INCOMPLETO_RECUPERABLE';
+          errMsg = ('INCOMPLETO_RECUPERABLE: Elementos afectados tras ' + maxIncRetries + ' reintentos [' + missingList + ']').slice(0, 160);
+        }
+      } else {
+        if (cursorObj) {
+          cursorObj.pauseCount = pauseCount;
+        } else if (isQuota) {
+          cursorObj = { offset: 0, pauseCount: pauseCount };
+        }
       }
+
       var cursorStr = cursorObj ? JSON.stringify(cursorObj) : '';
 
       shCola.getRange(job.rowIdx, 1, 1, 11).setValues([[
@@ -654,19 +828,20 @@ function orqTick() {
       ]]);
 
       var partial = (err && err.partialResult) ? err.partialResult : null;
+      var isNonErrState = (isQuota || isIncomplete);
       result = {
         runId: run.id,
         fecha: now,
         fuenteId: source.id,
         nombre: source.name,
         conector: job.connector,
-        estado: finalState,
+        estado: fuenteState,
         leidos: partial ? (Number(partial.leidos) || 0) : 0,
         repetidos: partial ? (Number(partial.repetidos) || 0) : 0,
         clasificados: partial ? (Number(partial.clasificados) || 0) : 0,
         solicitudes: partial ? (Number(partial.solicitudes) || 0) : 0,
         candidatos: partial ? (Number(partial.candidatos) || 0) : 0,
-        errores: isQuota ? (partial ? (Number(partial.errores) || 0) : 0) : Math.max(1, partial ? (Number(partial.errores) || 0) : 1),
+        errores: isNonErrState ? (partial ? (Number(partial.errores) || 0) : 0) : Math.max(1, partial ? (Number(partial.errores) || 0) : 1),
         youtube: partial ? (Number(partial.youtube) || 0) : 0,
         gemini: partial ? (Number(partial.gemini) || 0) : 0,
         duracion: Math.round((Date.now() - tickStart) / 100) / 10,
@@ -675,13 +850,20 @@ function orqTick() {
       orqRecordFuente_(ss, result);
 
       if (isQuota) {
-        // Distinguir ventana de espera según tipo de límite (RPM/TPM corto vs RPD diario)
-        var resetDate = new Date();
-        var waitMs = (qInfo && (qInfo.type === 'RPM' || qInfo.type === 'TPM')) ?
-          Math.min(3600000, 60000 * Math.max(1, pauseCount)) : 3600000;
-        resetDate = new Date(resetDate.getTime() + waitMs);
+        // Distinguir ventana de espera según tipo de límite:
+        // - RPD: programar después del reinicio de cuota del Pacífico (00:05 America/Los_Angeles).
+        // - RPM / TPM: espera corta escalonada (1 a 15 minutos).
+        var resetDate;
+        if (qType === 'RPD') {
+          resetDate = orqNextPacificReset_(new Date());
+          run.origenCuota = (err && err.httpStatus === 429) ? 'HTTP_429_RPD' : 'LOCAL_RPD';
+        } else {
+          var waitMs = Math.min(900000, 60000 * Math.max(1, pauseCount));
+          resetDate = new Date(Date.now() + waitMs);
+          run.origenCuota = 'HTTP_429_' + qType;
+        }
         run.estado = 'PAUSADO_CUOTA';
-        run.tipoCuota = qInfo ? qInfo.type : 'RPD';
+        run.tipoCuota = qType;
         run.proximaReanudacion = resetDate.toISOString();
         run.motivoPausa = errMsg;
         run.mensaje = 'Límite de cuota [' + run.tipoCuota + '] alcanzado (' + errMsg + '). Próxima reanudación: ' +
@@ -690,23 +872,29 @@ function orqTick() {
       }
     }
 
-    // Contar progreso diferenciando completados, fallidos, pendientes y pausados.
-    // ERROR_GMAIL / ERROR_RESOLUCION / ERROR y PAUSADO_CUOTA no cuentan como completados exitosamente.
+    // Contar progreso diferenciando completados, fallidos, pendientes, pausados y recuperables.
     var updatedColaRows = orqRows_(shCola).filter(function(r) { return String(r[0]) === run.id; });
     var completedCount = updatedColaRows.filter(function(r) { return String(r[5]) === 'COMPLETADO'; }).length;
     var failedCount = updatedColaRows.filter(function(r) { return String(r[5]) === 'ERROR'; }).length;
-    var pausedCount = updatedColaRows.filter(function(r) { return String(r[5]) === 'PAUSADO_CUOTA'; }).length;
+    var recoverableCount = updatedColaRows.filter(function(r) { return String(r[5]) === 'INCOMPLETO_RECUPERABLE'; }).length;
+    var pausedCount = updatedColaRows.filter(function(r) {
+      var s = String(r[5]);
+      return s === 'PAUSADO_CUOTA' || s === 'INCOMPLETO_RECUPERABLE';
+    }).length;
     var pendingCount = updatedColaRows.filter(function(r) { return String(r[5]) === 'PENDIENTE'; }).length;
 
     run.cursor = completedCount;
     run.completados = completedCount;
     run.fallidos = failedCount;
+    run.recuperables = recoverableCount;
     run.pausados = pausedCount;
     run.pendientes = pendingCount;
 
     if (run.estado === 'EJECUTANDO') {
       if (/^ERROR/i.test(String(result && result.estado || ''))) {
         run.mensaje = 'Fuente con error: ' + source.name + ' (' + result.estado + ')';
+      } else if (result && (result.estado === 'PENDIENTE_REINTENTO' || result.estado === 'INCOMPLETO_RECUPERABLE')) {
+        run.mensaje = 'Fuente con elementos pendientes: ' + source.name + ' (' + result.mensaje + ')';
       } else {
         run.mensaje = 'Fuente procesada: ' + source.name + ' (' + result.estado + ')';
       }
@@ -719,6 +907,12 @@ function orqTick() {
     if (run.estado === 'EJECUTANDO') {
       if (pendingCount > 0) {
         orqSchedule_();
+      } else if (recoverableCount > 0) {
+        run.estado = 'INCOMPLETO_RECUPERABLE';
+        run.mensaje = 'Búsqueda pausada con ' + recoverableCount + ' fuente(s) en estado INCOMPLETO_RECUPERABLE. ' + (result && result.mensaje || '');
+        orqSaveRun_(run);
+        orqUpdateRunRow_(ss, run);
+        orqRemoveTriggers_();
       } else {
         run.estado = 'FINALIZADO';
         run.mensaje = failedCount > 0 ?
@@ -745,8 +939,8 @@ function orqTick() {
 function orqResume() {
   var ss = orqDb_(), p = PropertiesService.getScriptProperties(), cfg = orqLoadConfig_();
   var run = orqGetRun_();
-  if (run.estado !== 'PAUSADO_CUOTA') {
-    return { ok: false, estado: run.estado, mensaje: 'La corrida no está pausada por cuota.' };
+  if (run.estado !== 'PAUSADO_CUOTA' && run.estado !== 'INCOMPLETO_RECUPERABLE') {
+    return { ok: false, estado: run.estado, mensaje: 'La corrida no está pausada por cuota ni en estado recuperable.' };
   }
   var gcap = typeof checkGeminiQuota_ === 'function' ?
     checkGeminiQuota_(p, { GEMINI_MAX_DAILY_CALLS: Number(cfg.GEMINI_MAX_DAILY_CALLS) || 20 }) : { allowed: true };
@@ -758,13 +952,24 @@ function orqResume() {
   delete run.proximaReanudacion;
   delete run.motivoPausa;
   delete run.tipoCuota;
+  delete run.origenCuota;
 
   var shCola = orqSheet_(ss, 'OrqCola');
   var cRows = orqRows_(shCola);
   for (var ci = 0; ci < cRows.length; ci++) {
-    if (String(cRows[ci][0]) === run.id && String(cRows[ci][5]) === 'PAUSADO_CUOTA') {
+    var rowSt = String(cRows[ci][5]);
+    if (String(cRows[ci][0]) === run.id && (rowSt === 'PAUSADO_CUOTA' || rowSt === 'INCOMPLETO_RECUPERABLE')) {
       var updatedRow = cRows[ci].slice();
       while (updatedRow.length < 11) updatedRow.push('');
+      if (updatedRow[7]) {
+        try {
+          var parsedCur = JSON.parse(String(updatedRow[7]));
+          if (parsedCur && typeof parsedCur === 'object') {
+            parsedCur.incompleteRetries = 0;
+            updatedRow[7] = JSON.stringify(parsedCur);
+          }
+        } catch(e) {}
+      }
       updatedRow[5] = 'PENDIENTE';
       updatedRow[10] = new Date();
       shCola.getRange(ci + 2, 1, 1, 11).setValues([updatedRow]);
@@ -787,16 +992,24 @@ function orqFlushHallazgos_(ss, rows, known) {
   }
 }
 
-function orqAttachPartial_(err, res, pendingItems, offset, pauseCount) {
+function orqAttachPartial_(err, res, pendingItems, offset, pauseCount, extra) {
   var errorObj = (err instanceof Error) ? err : new Error(String(err || 'Error en lote'));
   var isQ = orqIsQuotaError_(errorObj);
-  res.estado = isQ ? 'PAUSADO_CUOTA' : (/^ERROR/i.test(res.estado) ? res.estado : 'ERROR');
+  var isInc = !!(extra && extra.isIncomplete);
+  res.estado = isQ ? 'PAUSADO_CUOTA' : (isInc ? 'INCOMPLETO_RECUPERABLE' : (/^ERROR/i.test(res.estado) ? res.estado : 'ERROR'));
   res.mensaje = String(errorObj.message || errorObj).slice(0, 140);
-  if (!isQ) res.errores = (res.errores || 0) + 1;
+  if (!isQ && !isInc) res.errores = (res.errores || 0) + 1;
   errorObj.partialResult = res;
+  errorObj.isIncomplete = isInc;
+  errorObj.missingIds = (extra && Array.isArray(extra.missingIds)) ? extra.missingIds : [];
+  errorObj.madeBatchProgress = !!(extra && extra.madeBatchProgress);
+  var prevCur = (extra && extra.prevCursor && typeof extra.prevCursor === 'object') ? extra.prevCursor : {};
   errorObj.cursor = {
     offset: Number(offset) || 0,
     pauseCount: Number(pauseCount) || 0,
+    staleRetries: Number(prevCur.staleRetries) || 0,
+    incompleteRetries: Number(prevCur.incompleteRetries) || 0,
+    missingIds: errorObj.missingIds,
     leidos: res.leidos,
     repetidos: res.repetidos,
     clasificados: res.clasificados,
@@ -907,7 +1120,7 @@ function orqExecuteYouTube_(ss, run, source, jobCursor) {
       var qErr = new Error('PAUSADO_CUOTA [RPD]: Límite diario de Gemini alcanzado (' + (gcap.count || 0) + '/' + (gcap.max || 20) + ').');
       qErr.isQuota = true;
       qErr.quotaType = 'RPD';
-      throw orqAttachPartial_(qErr, res, unclassified.slice(b), baseOffset + b, jobCursor && jobCursor.pauseCount);
+      throw orqAttachPartial_(qErr, res, unclassified.slice(b), baseOffset + b, jobCursor && jobCursor.pauseCount, { prevCursor: jobCursor });
     }
 
     var batch = unclassified.slice(b, b + 5);
@@ -917,7 +1130,7 @@ function orqExecuteYouTube_(ss, run, source, jobCursor) {
       res.gemini++;
       if (typeof recordGeminiCall_ === 'function') recordGeminiCall_(p);
     } catch(err) {
-      throw orqAttachPartial_(err, res, unclassified.slice(b), baseOffset + b, jobCursor && jobCursor.pauseCount);
+      throw orqAttachPartial_(err, res, unclassified.slice(b), baseOffset + b, jobCursor && jobCursor.pauseCount, { prevCursor: jobCursor });
     }
 
     var batchRows = [];
@@ -952,14 +1165,25 @@ function orqExecuteYouTube_(ss, run, source, jobCursor) {
     orqFlushHallazgos_(ss, batchRows, known);
 
     if (missingInBatch.length > 0) {
+      var missingIdsYt = missingInBatch.map(function(m) { return String(m.id || ''); });
       var remainingUnclassified = missingInBatch.concat(unclassified.slice(b + 5));
       throw orqAttachPartial_(
-        new Error('Publicaciones pendientes de clasificación en lote YouTube (' + missingInBatch.length + ').'),
+        new Error('Respuesta incompleta de Gemini en YouTube; elementos pendientes [' + missingIdsYt.join(', ') + ']'),
         res,
         remainingUnclassified,
         baseOffset + b + batchRows.length,
-        jobCursor && jobCursor.pauseCount
+        jobCursor && jobCursor.pauseCount,
+        {
+          isIncomplete: true,
+          missingIds: missingIdsYt,
+          madeBatchProgress: batchRows.length > 0,
+          prevCursor: jobCursor
+        }
       );
+    }
+    if (jobCursor && typeof jobCursor === 'object') {
+      jobCursor.incompleteRetries = 0;
+      jobCursor.missingIds = [];
     }
   }
 
@@ -1058,7 +1282,7 @@ function orqExecuteRss_(ss, run, source, jobCursor) {
       var qErr = new Error('PAUSADO_CUOTA [RPD]: Límite diario de Gemini alcanzado (' + (gcap.count || 0) + '/' + (gcap.max || 20) + ').');
       qErr.isQuota = true;
       qErr.quotaType = 'RPD';
-      throw orqAttachPartial_(qErr, res, unclassified.slice(b), baseOffset + b, jobCursor && jobCursor.pauseCount);
+      throw orqAttachPartial_(qErr, res, unclassified.slice(b), baseOffset + b, jobCursor && jobCursor.pauseCount, { prevCursor: jobCursor });
     }
 
     var rawBatch = unclassified.slice(b, b + 5);
@@ -1067,14 +1291,16 @@ function orqExecuteRss_(ss, run, source, jobCursor) {
     });
 
     var byId = {};
+    var geminiFailedNonQuota = false;
     try {
       byId = orqCallGeminiBatch_(batch, model, gemKey, cfg);
       res.gemini++;
       if (typeof recordGeminiCall_ === 'function') recordGeminiCall_(p);
     } catch(e) {
       if (orqIsQuotaError_(e) || typeof evaluate !== 'function') {
-        throw orqAttachPartial_(e, res, unclassified.slice(b), baseOffset + b, jobCursor && jobCursor.pauseCount);
+        throw orqAttachPartial_(e, res, unclassified.slice(b), baseOffset + b, jobCursor && jobCursor.pauseCount, { prevCursor: jobCursor });
       }
+      geminiFailedNonQuota = true;
       res.errores++;
     }
 
@@ -1091,8 +1317,8 @@ function orqExecuteRss_(ss, run, source, jobCursor) {
         res.clasificados++;
         if (intention) res.solicitudes++;
         if (candidate) res.candidatos++;
-      } else if (typeof evaluate === 'function') {
-        // Fallback a evaluación por reglas solo ante fallos no-cuota de Gemini
+      } else if (geminiFailedNonQuota && typeof evaluate === 'function') {
+        // Fallback a evaluación por reglas solo ante fallos HTTP no-cuota de Gemini
         var ev = evaluate({ title: it.title, text: it.text, url: it.url, publishedAt: it.publishedAt, kind: 'tutoring' }, cfg, new Date(), {}, {});
         intention = ev.status !== 'Descartado';
         candidate = (['alta', 'media'].indexOf(String(ev.compatible || '').toLowerCase()) >= 0) && intention;
@@ -1125,14 +1351,25 @@ function orqExecuteRss_(ss, run, source, jobCursor) {
     orqFlushHallazgos_(ss, batchRows, known);
 
     if (missingInBatch.length > 0) {
+      var missingIdsRss = missingInBatch.map(function(m) { return String(m.computedId || m.id || ''); });
       var remainingRss = missingInBatch.concat(unclassified.slice(b + 5));
       throw orqAttachPartial_(
-        new Error('Publicaciones RSS pendientes de clasificación (' + missingInBatch.length + ').'),
+        new Error('Respuesta incompleta de Gemini en RSS; elementos pendientes [' + missingIdsRss.join(', ') + ']'),
         res,
         remainingRss,
         baseOffset + b + batchRows.length,
-        jobCursor && jobCursor.pauseCount
+        jobCursor && jobCursor.pauseCount,
+        {
+          isIncomplete: true,
+          missingIds: missingIdsRss,
+          madeBatchProgress: batchRows.length > 0,
+          prevCursor: jobCursor
+        }
       );
+    }
+    if (jobCursor && typeof jobCursor === 'object') {
+      jobCursor.incompleteRetries = 0;
+      jobCursor.missingIds = [];
     }
   }
 
@@ -1258,11 +1495,12 @@ function orqExecuteGmail_(ss, run, source, jobCursor) {
       var qErr = new Error('PAUSADO_CUOTA [RPD]: Límite diario de Gemini alcanzado (' + (gcap.count || 0) + '/' + (gcap.max || 20) + ').');
       qErr.isQuota = true;
       qErr.quotaType = 'RPD';
-      throw orqAttachPartial_(qErr, res, candidateItems.slice(b), baseOffset + b, jobCursor && jobCursor.pauseCount);
+      throw orqAttachPartial_(qErr, res, candidateItems.slice(b), baseOffset + b, jobCursor && jobCursor.pauseCount, { prevCursor: jobCursor });
     }
 
     var batch = candidateItems.slice(b, b + 5);
     var byId = {};
+    var geminiFailedNonQuota = false;
     try {
       var gemBatch = batch.map(function(it){ return { id: it._computedId, sourceLabel: 'Gmail', title: it.title, text: (it.text || '').slice(0, 500), url: it.url }; });
       byId = orqCallGeminiBatch_(gemBatch, model, gemKey, cfg);
@@ -1270,12 +1508,14 @@ function orqExecuteGmail_(ss, run, source, jobCursor) {
       if (typeof recordGeminiCall_ === 'function') recordGeminiCall_(p);
     } catch(e) {
       if (orqIsQuotaError_(e) || typeof evaluate !== 'function') {
-        throw orqAttachPartial_(e, res, candidateItems.slice(b), baseOffset + b, jobCursor && jobCursor.pauseCount);
+        throw orqAttachPartial_(e, res, candidateItems.slice(b), baseOffset + b, jobCursor && jobCursor.pauseCount, { prevCursor: jobCursor });
       }
+      geminiFailedNonQuota = true;
       res.errores++;
     }
 
     var batchRows = [];
+    var missingInBatch = [];
     batch.forEach(function(it) {
       if (known[it._computedId]) return;
       var r = byId[it._computedId] || null;
@@ -1288,8 +1528,8 @@ function orqExecuteGmail_(ss, run, source, jobCursor) {
         res.clasificados++;
         if (intention) res.solicitudes++;
         if (candidate) res.candidatos++;
-      } else {
-        // Evaluación por motor determinista de Core.js ante fallo no-cuota de Gemini
+      } else if (geminiFailedNonQuota) {
+        // Evaluación por motor determinista de Core.js solo ante fallo HTTP no-cuota de Gemini
         var ev = it._ev || { compatible: 'media', status: 'Evaluado', score: 3 };
         intention = true;
         candidate = (['alta', 'media'].indexOf(String(ev.compatible || '').toLowerCase()) >= 0);
@@ -1304,6 +1544,9 @@ function orqExecuteGmail_(ss, run, source, jobCursor) {
           confianza: ev.score >= 5 ? 0.9 : 0.75,
           resumen: ev.reasons || 'Solicitud de alumno extraída de alerta de plataforma docente'
         };
+      } else {
+        missingInBatch.push(it);
+        return;
       }
 
       var pubDateStr = '';
@@ -1321,6 +1564,28 @@ function orqExecuteGmail_(ss, run, source, jobCursor) {
     });
 
     orqFlushHallazgos_(ss, batchRows, known);
+
+    if (missingInBatch.length > 0) {
+      var missingIdsGm = missingInBatch.map(function(m) { return String(m._computedId || m.id || ''); });
+      var remainingGm = missingInBatch.concat(candidateItems.slice(b + 5));
+      throw orqAttachPartial_(
+        new Error('Respuesta incompleta de Gemini en Gmail; elementos pendientes [' + missingIdsGm.join(', ') + ']'),
+        res,
+        remainingGm,
+        baseOffset + b + batchRows.length,
+        jobCursor && jobCursor.pauseCount,
+        {
+          isIncomplete: true,
+          missingIds: missingIdsGm,
+          madeBatchProgress: batchRows.length > 0,
+          prevCursor: jobCursor
+        }
+      );
+    }
+    if (jobCursor && typeof jobCursor === 'object') {
+      jobCursor.incompleteRetries = 0;
+      jobCursor.missingIds = [];
+    }
   }
 
   orqUpdateSourceState_(ss, source.id, 'OPERATIVA');
@@ -1344,10 +1609,10 @@ function orqIsQuotaError_(errOrMsg) {
  */
 function orqClassifyQuotaError_(status, msg, gcap) {
   var text = String(msg || '');
-  if ((gcap && gcap.allowed === false) || /\[RPD\]|per.?day|daily|rpd|day.?limit|cuota diaria|l[ií]mite diario/i.test(text)) {
+  if ((gcap && gcap.allowed === false) || /\[RPD\]|per.?day|perday|requestsperday|daily|rpd|day.?limit|cuota diaria|l[ií]mite diario/i.test(text)) {
     return { isQuota: true, type: 'RPD', retryableInTick: false };
   }
-  if (/\[TPM\]|token|tpm|tokens per minute|input_token/i.test(text)) {
+  if (/\[TPM\]|token|tpm|tokens per minute|tokensperminute|input_token/i.test(text)) {
     return { isQuota: true, type: 'TPM', retryableInTick: true };
   }
   return { isQuota: true, type: 'RPM', retryableInTick: true };
@@ -1575,6 +1840,7 @@ function orqStatus() {
     fallidos: totals ? totals.fallidos : (run.fallidos || 0),
     pendientes: totals ? totals.pendientes : (run.pendientes || 0),
     pausados: totals ? totals.pausados : (run.pausados || 0),
+    recuperables: totals ? totals.recuperables : (run.recuperables || 0),
     total: run.total || 0,
     mensaje: run.mensaje || '',
     maxComments: run.maxComments || 15,
@@ -1601,6 +1867,7 @@ if (typeof module !== 'undefined') {
     orqSources_: orqSources_,
     orqTotals_: orqTotals_,
     orqClassifyQuotaError_: orqClassifyQuotaError_,
+    orqNextPacificReset_: orqNextPacificReset_,
     orqPaceGemini_: orqPaceGemini_,
     orqSetSourceActive: orqSetSourceActive,
     orqSTAGING_ID: ORQ_STAGING_ID
