@@ -2,6 +2,14 @@
 
 **Corte verificable de esta fotografía: 2026-11-01.** Este documento es un resumen para retomar el proyecto, **no** una verificación automática permanente. Actualizarlo tras cada cambio importante.
 
+## Novedad técnica posterior — 2026-11-01
+
+- **Diagnóstico de fuentes:** [auditoría e inventario de 77 fuentes](AUDITORIA_FUENTES_2026-11-01.md); 0 candidatos y fallos concretos en Gmail, resolución de canales y métricas.
+- **Trabajo en curso:** [pull request borrador #12](https://github.com/metecondrie/student-lead-discovery-agent/pull/12), rama `fix/gmail-diagnostico-y-piloto-20261101` contra `fix/orquestador-cuota-gmail-progreso-20261101`. Implementa validación/rehidratación defensiva de GmailThread, tres tests y CI para ramas `fix/**`.
+- **CI:** GitHub Actions pasó para el HEAD `d4de518a185d18f822d27070d7b3dd36f65a7369` (push y PR), pero **no certifica el error real en Apps Script**.
+- **Piloto comercial propuesto:** [cuatro fuentes automáticas y vías de captación manual](https://github.com/metecondrie/student-lead-discovery-agent/blob/fix/gmail-diagnostico-y-piloto-20261101/docs/PILOTO_COMERCIAL_2026-11-01.md). No se modificaron fuentes ni triggers de STAGING y **no se desplegó el PR**.
+- **Siguiente paso imprescindible:** identificar la versión real del despliegue, examinar la corrida sin sobrescribirla y reproducir `th.getMessages is not a function`; verificar que la corrección resuelva la causa antes de fusionar o desplegar.
+
 ## 1. Dónde está cada cosa
 - **GitHub:** repositorio `metecondrie/student-lead-discovery-agent`, **público** al momento de la verificación. El README anterior de `main` decía «privado»; esa frase era incorrecta.
 - **`main`:** solo documentación y configuración de ejemplo, **no** el código operativo del orquestador.
