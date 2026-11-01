@@ -18,7 +18,12 @@
 3. [Estrategia de captación](docs/ESTRATEGIA_CAPTACION.md).
 4. [Roadmap](docs/ROADMAP.md), [seguridad](SECURITY.md) y documentación técnica de esta rama.
 
-**Rama:** `fix/orquestador-cuota-gmail-progreso-20261101`. Último commit de código documentado: `5d33e1510628a3ed0c2e2d87df38c6b30bcaa97f`. Revisar si hubo nuevos commits antes de intervenir; no usar `main` como si contuviera el código.
+**Rama técnica de referencia para continuar:** `fix/auditoria-criticos-20261101` ([PR #14](https://github.com/metecondrie/student-lead-discovery-agent/pull/14) contra `fix/gmail-diagnostico-y-piloto-20261101`, [PR #12](https://github.com/metecondrie/student-lead-discovery-agent/pull/12)). La rama `feature/auditoria-descartes-manual` conserva funciones que **no** se integraron todavía. Consultar el SHA y el CI vigentes; no usar `main` como si tuviera el código.
+
+## Estado de auditorías y seguridad (2026-11-01)
+- [Comparación de dos auditorías externas y correcciones del PR #14](docs/AUDITORIAS_COMPARADAS_Y_CORRECCIONES_2026-11-01.md).
+- **Bloqueante de despliegue:** revisar que el web app no sea accesible a terceros ejecutando como propietario. Ver [checklist](docs/VERIFICAR_DESPLIEGUE_APPS_SCRIPT_2026-11-01.md).
+- Motor legacy `runCycle`: **no reactivar** hasta igualar la protección anti doble contacto del orquestador. El fallback oculto YouTube y la simulación con consumo real se corrigieron solo en PR #14.
 
 ## Arquitectura general
 `gas/Core.js` (normalización, filtros, deduplicación, clasificación), `gas/Main.js` (Gmail/Sheets, funciones auxiliares), `gas/Catalogo.js` (catálogo de fuentes), `gas/Orquestador.js` (corridas, cuotas, cola y continuación), `gas/PanelOrquestador.html` (interfaz), módulos de YouTube y `tests/`.
@@ -27,8 +32,8 @@ Conectores investigados/implementados en distinto grado: alertas Gmail, RSS púb
 
 ## Evidencia y límites
 - Commits recientes de cuota/reintento HTTP 429, persistencia del cursor, recuperación de trabajos y protección de corridas pausadas.
-- El README previo declaraba 90 pruebas locales simuladas aprobadas. No se volvieron a correr en la preparación de esta documentación: ejecutar `npm test` y comprobar CI en el commit actual.
-- Existe una planilla STAGING con estados de orquestación. Una corrida antigua consta como `EJECUTANDO`, pero no se verificó en vivo su trigger; **no iniciar una corrida nueva sobre la existente sin inspección y autorización**.
+- A 2026-11-01, el código de PR #12 tenía 159 pruebas simuladas verdes. PR #14 agrega regresiones: verificar **último HEAD y CI** en GitHub Actions. La batería de Node no demuestra funcionamiento real de Apps Script.
+- En el último registro de la planilla STAGING consultado el 2026-11-01, la corrida de 77 fuentes figura `FINALIZADO` (482 elementos leídos, 350 clasificados, 6 solicitudes y 0 candidatos). **No se verificaron Script Properties ni triggers**; no reanudar ni reiniciar sin comprobarlo.
 - Una sesión de despliegue STAGING reportó actualización a versión 2, pero no hay comprobación aquí de que el `/exec` operativo corresponda a este código de GitHub. No afirmar producción validada.
 - Estado del motor antiguo: `SISTEMA_ACTIVO = FALSE` en Sheets al 2026-11-01.
 - Se encontraron duplicados de un aviso Tusclases y falso positivo administrativo Superprof en el motor anterior; falta validar la corrección end-to-end.

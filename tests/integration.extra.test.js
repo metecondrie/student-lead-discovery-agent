@@ -9,7 +9,10 @@ function item(text, source='youtube', id='Q') {
 }
 function makeGeminiEnv(reply, key='R1') {
  const feeds={generateContent:{candidates:[{content:{parts:[{text:JSON.stringify([{
-   id:key,es_solicitud_clases:reply,materia:'Matemática',nivel:'CBC',urgencia:'alta',confianza:.96,resumen:reply?'Busca profesor':'Duda gratis'}])}]}}]}};
+   id:key,es_solicitud_clases:reply,
+   destinatario:reply?'pedido_abierto':'dirigido_al_creador',
+   contactabilidad:'canal_publico_permitido', oportunidad_comercial_alejo:reply,
+   materia:'Matemática',nivel:'CBC',urgencia:'alta',confianza:.96,resumen:reply?'Busca profesor':'Duda gratis'}])}]}}]}};
  const env=makeEnv({feeds,me:'demo@example.test',now}); ctxRef.env=env; env.setup(); env.setConfig_('SISTEMA_ACTIVO',true); env.setConfig_('GEMINI_ACTIVO',true); env.setGeminiApiKey('dummy-test-key');
  return env;
 }
@@ -78,10 +81,15 @@ test('El rastreador de YouTube alimenta Gemini antes de dar de alta una oportuni
   generateContent:(url,opts)=>{
    const prompt=JSON.parse(opts.payload).contents[0].parts[0].text;
    const id=prompt.match(/ID: ([^\n]+)/)?.[1];
-   return {candidates:[{content:{parts:[{text:JSON.stringify([{id,es_solicitud_clases:true,materia:'Álgebra',nivel:'Universitario',urgencia:'media',confianza:0.95,resumen:'Solicitud abierta'}])}]}}]};
+   return {candidates:[{content:{parts:[{text:JSON.stringify([{id,es_solicitud_clases:true,destinatario:'pedido_abierto',contactabilidad:'canal_publico_permitido',
+      oportunidad_comercial_alejo:true,materia:'Álgebra',nivel:'Universitario',
+      urgencia:'media',confianza:0.95,resumen:'Solicitud abierta'}])}]}}]};
   }
  }});
  ctxRef.env=env;env.setup();env.setConfig_('SISTEMA_ACTIVO',true);env.setConfig_('GEMINI_ACTIVO',true);env.setConfig_('YOUTUBE_ACTIVO',true);
+ const youtubeRow = env.sheets['Fuentes'].data.find(r => r[0] === 'CAT-0178');
+ assert.ok(youtubeRow);
+ youtubeRow[7] = true;
  env.setYouTubeApiKey('unit-test-key');env.setGeminiApiKey('unit-test-key');
  const res=env.runCycle({noNotify:true});
  assert.equal(res.err.length,0,res.err.join('; '));

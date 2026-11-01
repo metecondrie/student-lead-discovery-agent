@@ -1162,6 +1162,20 @@ test('Hoja Fuentes: setup() crea la hoja Fuentes con encabezados y fuentes prede
   assert.ok(rows.every(r => r[7] === 'FALSE'), 'Todas las fuentes precargadas de YouTube deben comenzar con Activo = FALSE');
 });
 
+test('legacy YouTube: desactivar todas las fuentes en Sheets no dispara fallback oculto', () => {
+  const env = makeEnv({ threads: [], feeds: {}, me: 'demo@example.test' });
+  ctxRef.env = env;
+  env.setup(); env.setConfig_('SISTEMA_ACTIVO', true);
+  env.setConfig_('YOUTUBE_ACTIVO', true);
+  env.setYouTubeApiKey('test-key');
+  assert.ok(env.sheets['Fuentes'].data.slice(1).every(r => String(r[7]).toUpperCase() === 'FALSE'));
+  const st = env.runCycle({ noNotify: true });
+  assert.equal(st.err.length, 0);
+  assert.equal(env.fetched.filter(url => /youtube\/v3\/|youtube\.googleapis\.com/i.test(url)).length,
+    0, 'no consulta YouTube si ninguna fuente está activa (otros feeds pueden operar)');
+  assert.equal(env.sheets['Oportunidades'].data.length, 1);
+});
+
 test('Integración YouTube: runCycle procesa comentarios de YouTube, filtra ruido y deduplica', () => {
   const ytApiResponse = {
     kind: 'youtube#commentThreadListResponse',
@@ -1211,6 +1225,10 @@ test('Integración YouTube: runCycle procesa comentarios de YouTube, filtra ruid
 
   // Activar YouTube y configurar API Key
   env.setConfig_('YOUTUBE_ACTIVO', true);
+  // La hoja Fuentes se configuró explícitamente: no se usa fallback embebido.
+  const youtubeRow = env.sheets['Fuentes'].data.find(r => r[0] === 'CAT-0178');
+  assert.ok(youtubeRow, 'la configuración de fuentes existe');
+  youtubeRow[7] = true;
   env.setYouTubeApiKey('test-key');
 
   // Ejecución ciclo normal
@@ -1264,6 +1282,10 @@ test('Integración YouTube: probarSinEnviar() en simulación estricta no modific
   ctxRef.env = env;
   env.setup(); env.setConfig_('SISTEMA_ACTIVO', true); /* habilitación explícita solo en test */
   env.setConfig_('YOUTUBE_ACTIVO', true);
+  // La hoja Fuentes se configuró explícitamente: no se usa fallback embebido.
+  const youtubeRow = env.sheets['Fuentes'].data.find(r => r[0] === 'CAT-0178');
+  assert.ok(youtubeRow, 'la configuración de fuentes existe');
+  youtubeRow[7] = true;
   env.setYouTubeApiKey('test-key');
 
   const stSim = env.probarSinEnviar();
@@ -1282,6 +1304,10 @@ test('Integración YouTube: fallo de red en YouTube API no bloquea el ciclo ni o
   ctxRef.env = env;
   env.setup(); env.setConfig_('SISTEMA_ACTIVO', true); /* habilitación explícita solo en test */
   env.setConfig_('YOUTUBE_ACTIVO', true);
+  // La hoja Fuentes se configuró explícitamente: no se usa fallback embebido.
+  const youtubeRow = env.sheets['Fuentes'].data.find(r => r[0] === 'CAT-0178');
+  assert.ok(youtubeRow, 'la configuración de fuentes existe');
+  youtubeRow[7] = true;
   env.setYouTubeApiKey('test-key');
 
   const st = env.runCycle({ noNotify: true });
@@ -1594,6 +1620,66 @@ test('Auditoría 5 Gemini: buildGeminiPrompt y parseGeminiResponse procesan lote
   assert.strictEqual(core.parseGeminiResponse('{"no_array": true}'), null);
 });
 
+test('puntajes: PESOS como JSON de Sheets equivale a configuración numérica', () => {
+  const now = new Date('2026-10-30T12:00:00Z');
+  const request = {
+    id: 'weights-test', source: 'tusclases', sourceLabel: 'Tusclases',
+    title: 'Busco profesor de Matemática', text: 'Busco clases online de matemática CBC para preparar final',
+    kind: 'tutoring', url: 'https://www.tusclases.com.ar/alumnos/1234567.aspx',
+    publishedAt: now
+  };
+  const numeric = core.evaluate({ ...request }, core.DEFAULT_CONFIG, now, {}, {});
+  const textConfig = { ...core.DEFAULT_CONFIG, PESOS: JSON.stringify(core.DEFAULT_CONFIG.PESOS) };
+  const stringResult = core.evaluate({ ...request }, textConfig, now, {}, {});
+  assert.ok(Number.isFinite(numeric.score));
+  assert.ok(Number.isFinite(stringResult.score));
+  assert.equal(stringResult.score, numeric.score);
+  assert.equal(stringResult.compatible, numeric.compatible);
+
+  const brokenConfig = { ...core.DEFAULT_CONFIG, PESOS: '{missing-bracket' };
+  const recovered = core.evaluate({ ...request }, brokenConfig, now, {}, {});
+  assert.equal(recovered.score, numeric.score, 'configuración inválida recupera pesos de fábrica');
+});
+
+test('simulación YouTube: no consume cuota ni visita API aunque haya fuentes habilitadas', () => {
+  const env = makeEnv({ me: 'demo@example.test' });
+  ctxRef.env = env;
+  env.setup(); env.setConfig_('SISTEMA_ACTIVO', true);
+  env.setConfig_('YOUTUBE_ACTIVO', true);
+  env.setYouTubeApiKey('test-key');
+  const row = env.sheets.Fuentes.data.find(r => r[0] === 'CAT-0178');
+  assert.ok(row);
+  row[7] = true;
+  const before = env.fetched.filter(url => /youtube\/v3\//i.test(url)).length;
+  env.probarSinEnviar();
+  const after = env.fetched.filter(url => /youtube\/v3\//i.test(url)).length;
+  assert.equal(after, before, 'simulación no consulta API YouTube');
+});
+
+test('seguridad Gemini: enums inventados nunca convierten la solicitud en contacto permitido', () => {
+  const input = [
+    { id: 'unrecognized', es_solicitud_clases: true,
+      destinatario: 'puede_contactar_a_cualquiera', contactabilidad: 'whatsap_privado_automatico',
+      oportunidad_comercial_alejo: true, confianza: 0.99 },
+    { id: 'unknown', es_solicitud_clases: true,
+      destinatario: 'desconocido', contactabilidad: 'canal_publico_permitido',
+      oportunidad_comercial_alejo: true, confianza: 0.99 },
+    { id: 'missing', es_solicitud_clases: true,
+      oportunidad_comercial_alejo: true, confianza: 0.99 },
+    { id: 'valid', es_solicitud_clases: true,
+      destinatario: 'pedido_abierto', contactabilidad: 'canal_publico_permitido',
+      oportunidad_comercial_alejo: true, confianza: 0.96 }
+  ];
+  const out = core.parseGeminiResponse(JSON.stringify(input));
+  assert.equal(out.length, 4);
+  assert.equal(out[0].destinatario, 'ambiguo');
+  assert.equal(out[0].contactabilidad, 'no_verificada');
+  assert.equal(out[0].oportunidad_comercial_alejo, false);
+  assert.equal(out[1].oportunidad_comercial_alejo, false);
+  assert.equal(out[2].oportunidad_comercial_alejo, false);
+  assert.equal(out[3].oportunidad_comercial_alejo, true);
+});
+
 test('Auditoría 5 Gemini integración: cola persistente _cola_ia y procesamiento por lotes con callGeminiBatch_', () => {
   const env = makeEnv({
     threads: [],
@@ -1603,7 +1689,9 @@ test('Auditoría 5 Gemini integración: cola persistente _cola_ia y procesamient
           content: {
             parts: [{
               text: JSON.stringify([
-                { id: 'Q1', es_solicitud_clases: true, materia: 'Biofísica', nivel: 'CBC', urgencia: 'alta', confianza: 0.9, resumen: 'Preparar parcial CBC' }
+                { id: 'Q1', es_solicitud_clases: true, destinatario: 'pedido_abierto',
+                  contactabilidad: 'canal_publico_permitido', oportunidad_comercial_alejo: true,
+                  materia: 'Biofísica', nivel: 'CBC', urgencia: 'alta', confianza: 0.9, resumen: 'Preparar parcial CBC' }
               ])
             }]
           }

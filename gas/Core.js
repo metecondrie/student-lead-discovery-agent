@@ -733,7 +733,19 @@ function usdReference(cfg, now) {
 
 function evaluate(it, cfg, now, index, contacted) {
   cfg = cfg || DEFAULT_CONFIG; index = index || {}; index.ids = index.ids || {}; index.keys = index.keys || {}; contacted = contacted || {};
-  var W = cfg.PESOS || DEFAULT_CONFIG.PESOS, n = norm(it.text), reasons = [], discard = '';
+  // Config en Sheets guarda PESOS como JSON: no usar strings como pesos (NaN).
+  var rawWeights = cfg.PESOS;
+  if (typeof rawWeights === 'string') {
+    try { rawWeights = JSON.parse(rawWeights); } catch (e) { rawWeights = null; }
+  }
+  if (!rawWeights || typeof rawWeights !== 'object' || Array.isArray(rawWeights)) rawWeights = {};
+  var W = {};
+  Object.keys(DEFAULT_CONFIG.PESOS).forEach(function(k) {
+    var v = Number(rawWeights[k]);
+    W[k] = (rawWeights[k] !== undefined && isFinite(v) && v >= 0) ?
+      v : DEFAULT_CONFIG.PESOS[k];
+  });
+  var n = norm(it.text), reasons = [], discard = '';
   var mainText = it.text ? String(it.text).split('\n[Materia video:')[0] : '';
   var subs = detectSubjects(it.kind === 'job' ? it.title : (mainText || it.text));
   if (!subs.length && !NOT_TAUGHT.test(norm(mainText))) subs = detectSubjects(it.kind === 'job' ? it.title : it.text);
@@ -1119,7 +1131,7 @@ function parseGeminiResponse(rawText) {
           else if (/abierto|comunidad|todos/i.test(rawDest)) dest = 'pedido_abierto';
           else if (/otro|tercero/i.test(rawDest)) dest = 'dirigido_a_otro_docente';
           else if (/ambiguo|dudoso/i.test(rawDest)) dest = 'ambiguo';
-          else dest = isSol ? 'pedido_abierto' : 'desconocido';
+          else dest = 'ambiguo';
         }
 
         var rawCont = String(obj.contactabilidad || '').toLowerCase().trim().replace(/[\s-]+/g, '_');
@@ -1128,7 +1140,7 @@ function parseGeminiResponse(rawText) {
           if (/ofrecido|voluntario|whatsapp|email|telefono/i.test(rawCont)) cont = 'contacto_ofrecido_voluntariamente';
           else if (/publico|canal_publico|abierto/i.test(rawCont)) cont = 'canal_publico_permitido';
           else if (/inexistente|cerrado|imposible/i.test(rawCont)) cont = 'via_inexistente';
-          else cont = isSol ? 'canal_publico_permitido' : 'no_verificada';
+          else cont = 'no_verificada';
         }
 
         var conf = typeof obj.confianza === 'number' ? Math.max(0, Math.min(1, obj.confianza)) : 0.5;
@@ -1137,8 +1149,9 @@ function parseGeminiResponse(rawText) {
         // NUNCA puede considerarse oportunidad comercial real para Alejo.
         var opComercial = typeof obj.oportunidad_comercial_alejo === 'boolean'
           ? obj.oportunidad_comercial_alejo
-          : (isSol && dest === 'pedido_abierto' && cont !== 'via_inexistente');
-        if (!isSol || dest === 'dirigido_al_creador' || dest === 'dirigido_a_otro_docente' || dest === 'ambiguo' || cont === 'via_inexistente') {
+          : false; // Nunca inventar oportunidad comercial ante respuesta incompleta.
+        if (!isSol || dest !== 'pedido_abierto' ||
+            (cont !== 'canal_publico_permitido' && cont !== 'contacto_ofrecido_voluntariamente')) {
           opComercial = false;
         }
 

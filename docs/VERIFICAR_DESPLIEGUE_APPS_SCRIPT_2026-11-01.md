@@ -4,6 +4,18 @@
 
 **Importante:** la conexión de ChatGPT a Google Drive/Sheets permite leer datos y estados, **no expone aquí la API de Apps Script para obtener código de proyectos y versiones**. No se pudo leer el código real del despliegue desde esta sesión. El endpoint `/exec` tampoco fue accesible por lectura pública. No afirmar que la rama GitHub está desplegada.
 
+## BLOQUEANTE DE SEGURIDAD: acceso a la web app
+
+Antes de cualquier `clasp push`, `deploy` o ejecución en STAGING, comprobar en **Apps Script → Implementar → Administrar implementaciones**:
+
+1. **Quién tiene acceso:** debe ser **Solo yo / Only myself** para este panel personal. Si figura **Cualquiera / Anyone**, **cualquiera con el enlace** o cualquier opción más amplia, **NO operar la web app** antes de restringirla y revisar el impacto.
+2. **Ejecutar como:** comprobar expresamente si se ejecuta con la identidad del propietario o del visitante. La combinación **Anyone + Execute as me** puede exponer funciones con privilegios sobre Sheets, Gmail, Script Properties y triggers.
+3. **Identidad del llamador:** no usar `Session.getEffectiveUser().getEmail()` como prueba de que el visitante es el propietario cuando el despliegue se ejecuta como propietario: indica quién ejecuta, no necesariamente quién invoca. `getActiveUser().getEmail()` puede estar vacío según el contexto; su uso debe ser probado y fallar cerrado.
+4. **Funciones invocables:** revisar `doGet`, `orqStart`, `orqResume`, `orqStop`, diagnósticos y funciones públicas de configuración `setGeminiApiKey`, `setYouTubeApiKey`, `instalar`. Las confirmaciones del navegador **no sustituyen** autorización en servidor.
+5. **Registro de evidencia:** anotar en una ubicación privada el deployment exacto, `versionNumber`, las dos opciones de acceso y el resultado de una comprobación desde una sesión no autorizada. **No publicar IDs, pantallas privadas ni credenciales en GitHub**.
+
+El código versionado en [PR #14](https://github.com/metecondrie/student-lead-discovery-agent/pull/14) **todavía no implementa una política universal de autorización de llamadas**, por lo que exigir acceso restringido es condición previa obligatoria. Para compartir la interfaz con terceros se requiere diseño adicional de autorización por función, pruebas y consentimiento explícito.
+
 ## Alternativa automatizada para Windows (PowerShell)
 
 Se agregó una herramienta de **solo lectura** en el [PR #12](https://github.com/metecondrie/student-lead-discovery-agent/blob/fix/gmail-diagnostico-y-piloto-20261101/tools/verificar-staging-solo-lectura.ps1), `tools/verificar-staging-solo-lectura.ps1`, para que otra IA con acceso local ejecute la comparación sin tener que escribir comandos sueltos. Requiere que `clasp` esté instalado y autenticado con la cuenta propietaria; **no instala paquetes, no ejecuta push, deploy, triggers ni funciones Apps Script**.

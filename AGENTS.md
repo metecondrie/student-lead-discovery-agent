@@ -4,9 +4,15 @@
 
 ## Antes de intervenir (obligatorio)
 1. Leer este archivo, `docs/ESTADO_ACTUAL.md`, `docs/ESTRATEGIA_CAPTACION.md`, `SECURITY.md` y luego el código y las pruebas de la rama correcta.
-2. No suponer que `main` tiene la aplicación: `main` sirve como punto de entrada; la candidata de código más avanzada verificada a 2026-11-01 es `fix/orquestador-cuota-gmail-progreso-20261101` (HEAD de ese momento: `5d33e1510628a3ed0c2e2d87df38c6b30bcaa97f`). Consultar GitHub por commits posteriores antes de trabajar.
+2. No suponer que `main` tiene la aplicación. La línea con correcciones técnicas es `fix/gmail-diagnostico-y-piloto-20261101` ([PR #12](https://github.com/metecondrie/student-lead-discovery-agent/pull/12)); la candidata de auditorías es `fix/auditoria-criticos-20261101` ([PR #14](https://github.com/metecondrie/student-lead-discovery-agent/pull/14)) aún sin fusionar. Además `feature/auditoria-descartes-manual` contiene una auditoría adicional sin integrar. Leer [comparación](docs/AUDITORIAS_COMPARADAS_Y_CORRECCIONES_2026-11-01.md) antes de cambiar código. Confirmar HEAD/CI vigentes.
 3. Separar hechos confirmados por GitHub, estado de hojas, estado real de Apps Script y declaraciones de documentación anterior. No afirmar que un despliegue funciona porque una prueba simulada pasó.
 4. Informar primero el estado encontrado, proponer el cambio mínimo, ejecutar pruebas y documentar resultados. No fusionar ni desplegar versiones solo por la existencia de una rama más nueva.
+
+## Bloqueantes de continuidad (auditorías del 01/11)
+- PR #14 elimina contactos inventados por el fallback Gemini, normaliza los enums y hace fail-closed ante respuestas insuficientes. **No volver a agregar fallback que declare consentimiento, contacto voluntario o confianza no verificados.**
+- No reactivar el motor legacy si no contempla los comprobantes de contacto de plataformas que faltan en `Contactados`.
+- No fusionar `feature/auditoria-descartes-manual` a ciegas: existe trabajo divergente sobre trazas `OrqAuditoria` no incorporado en PR #14.
+- Antes de cualquier despliegue, comprobar acceso **solo al propietario** de la web app y la identidad real de las invocaciones. `Session.getEffectiveUser()` puede identificar al propietario que ejecuta, NO al visitante; nunca es una guarda completa si la aplicación se ejecuta como propietario.
 
 ## Seguridad y autorización
 - **Nunca enviar correos, mensajes de Tusclases, WhatsApp, comentarios, DM ni publicaciones a terceros sin aprobación explícita y específica del usuario.** Redactar no implica enviar.

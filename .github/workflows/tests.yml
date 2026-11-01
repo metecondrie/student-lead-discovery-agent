@@ -1,10 +1,13 @@
 name: Node.js regression tests
 on:
   push:
-    branches: [main, 'develop/**', 'feature/**', 'fix/**']
+    branches: [main]
   pull_request:
     branches: [main, 'develop/**', 'feature/**', 'fix/**']
   workflow_dispatch:
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 jobs:
   test:
     runs-on: ubuntu-latest
