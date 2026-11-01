@@ -741,6 +741,101 @@ test('deduplicación Gmail: dos emails distintos del mismo aviso no gastan dos c
   assert.equal(env.sheets.OrqHallazgos.rows.length, 2, 'otra corrida tampoco duplica el mismo anuncio');
 });
 
+
+test('control previo: identifica anuncios de Tusclases en enlaces directos y tracking codificado sin navegar', () => {
+  const env = createMockEnv();
+  const url = 'https://www.tusclases.com.ar/estudiante-matematica/pedido-2466634.aspx?utm_source=mail';
+  const ses = 'https://abc.awstrack.me/L0/' + encodeURIComponent(url) + '/42/hash';
+  assert.deepEqual(Array.from(env.ctx.orqTusclasesIds_(url)), ['2466634']);
+  assert.deepEqual(Array.from(env.ctx.orqTusclasesIds_(ses)), ['2466634']);
+  assert.deepEqual(Array.from(env.ctx.orqTusclasesIds_('https://www.tusclases.com.ar/inbox')), []);
+  assert.deepEqual(Array.from(env.ctx.orqTusclasesIds_('https://www.superprof.com.ar/profesor/perfil')), []);
+});
+
+test('control previo: Contactados bloquea alumno confirmado antes de gastar una llamada Gemini', () => {
+  const env = createMockEnv();
+  addGmailFixture_(env, 'GM-CONTACTADO');
+  const ss = env.ctx.SpreadsheetApp.openById(STAGING);
+  const contacts = ss.insertSheet('Contactados');
+  contacts.rows.push(['Nombre', 'Materia', 'URL', 'Fecha', 'Nota']);
+  contacts.rows.push(['Alumno de prueba', 'Matemática',
+    'https://www.tusclases.com.ar/estudiante-matematica/pedido-2466634.aspx?utm_source=alerta',
+    '2026-10-28', 'Confirmación simulada']);
+
+  env.ctx.orqStart(['GM-CONTACTADO'], 10);
+  const report = env.ctx.orqStatus();
+  assert.equal(report.estado, 'FINALIZADO');
+  assert.equal(report.metricas.candidatos, 0);
+  assert.equal(report.metricas.repetidos, 1);
+  assert.equal(env.sheets.OrqHallazgos.rows.length, 1, 'contacto previo no reaparece como solicitud nueva');
+  assert.equal(env.stats.gem, 0, 'no consume Gemini en contacto previamente confirmado');
+  const index = env.ctx.orqContactHistory_(ss);
+  assert.equal(index.crmChecked, true);
+  assert.equal(index.crmRows, 1);
+  assert.equal(index.known['2466634'], true);
+  assert.doesNotMatch(JSON.stringify(report), /Alumno de prueba|Confirmación simulada/);
+});
+
+test('control previo: comprobante recibido de Tusclases bloquea contacto aunque no figure en Contactados', () => {
+  const env = createMockEnv();
+  addGmailFixture_(env, 'GM-RECIBO');
+  const actualSearch = env.ctx.GmailApp.search;
+  const url = 'https://www.tusclases.com.ar/estudiante-matematica/pedido-2466634.aspx';
+  const ses = 'https://abc.awstrack.me/L0/' + encodeURIComponent(url) + '/44/hash';
+  env.ctx.GmailApp.search = q => {
+    if (/subject:"Mensaje desde tusclases/i.test(q)) {
+      return [{
+        getId: () => 'receipt-thread',
+        getMessages: () => [{
+          getSubject: () => 'Mensaje desde tusclases.com.ar: profesor contactado',
+          getPlainBody: () => 'Tu mensaje se ha enviado correctamente.\n' + ses
+        }]
+      }];
+    }
+    if (/^in:sent/.test(q)) return [];
+    return actualSearch(q);
+  };
+  env.ctx.orqStart(['GM-RECIBO'], 10);
+  assert.equal(env.ctx.orqStatus().metricas.candidatos, 0);
+  assert.equal(env.ctx.orqStatus().metricas.repetidos, 1);
+  assert.equal(env.stats.gem, 0);
+});
+
+test('control previo: solicitud sin contacto confirmado queda VISIBLE como pendiente, nunca como lista para enviar', () => {
+  const env = createMockEnv();
+  addGmailFixture_(env, 'GM-PENDIENTE');
+  const ss = env.ctx.SpreadsheetApp.openById(STAGING);
+  const contacts = ss.insertSheet('Contactados');
+  contacts.rows.push(['Nombre', 'Materia', 'URL', 'Fecha', 'Nota']);
+  contacts.rows.push(['Otro alumno', 'Química',
+    'https://www.tusclases.com.ar/estudiante-quimica/solicitud-2466635.aspx',
+    '2026-10-28', '']);
+  env.ctx.orqStart(['GM-PENDIENTE'], 10);
+  const status = env.ctx.orqStatus();
+  const relevant = env.sheets.OrqHallazgos.rows.slice(1).filter(row => row[2] === 'Gmail');
+  assert.equal(status.metricas.candidatos, 1);
+  assert.equal(relevant.length, 1);
+  assert.equal(relevant[0][11], 'VERIFICAR_CONTACTO');
+  assert.equal(status.candidatos.length, 1, 'se puede revisar sin contacto automático');
+  assert.equal(status.candidatos[0].estadoContacto, 'PENDIENTE_VERIFICAR_EN_PLATAFORMA');
+});
+
+test('control previo: si Gmail no permite verificar recibidos o enviados, no se afirma contacto libre', () => {
+  const env = createMockEnv();
+  addGmailFixture_(env, 'GM-ERROR-AUDITORIA');
+  const actual = env.ctx.GmailApp.search;
+  env.ctx.GmailApp.search = q => {
+    if (/^newer_than:365d subject:|^in:sent/.test(q)) throw new Error('No autorizado');
+    return actual(q);
+  };
+  env.ctx.orqStart(['GM-ERROR-AUDITORIA'], 10);
+  const rows = env.sheets.OrqHallazgos.rows.slice(1);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0][11], 'VERIFICAR_CONTACTO');
+  assert.match(String(rows[0][15]), /VERIFICACION_INCOMPLETA/);
+  assert.equal(env.ctx.orqStatus().candidatos[0].estadoContacto, 'PENDIENTE_VERIFICAR_EN_PLATAFORMA');
+});
+
 test('regresión Gmail: rehidrata descriptor con ID en lugar de llamar getMessages sobre JSON', () => {
   const env = createMockEnv();
   addGmailFixture_(env, 'GM-SERIAL');
