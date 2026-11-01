@@ -1642,6 +1642,7 @@ function orqContactHistory_(ss) {
 
   if (typeof GmailApp === 'undefined' || typeof GmailApp.search !== 'function') {
     output.incomplete = true;
+    output.crmUnique = Object.keys(crmIds).length;
     return output;
   }
 
