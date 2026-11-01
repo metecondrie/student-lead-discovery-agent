@@ -1299,6 +1299,24 @@ test('recuperación 3: cuota diaria real RPD programada tras reinicio del Pacíf
   assert.equal(st77.metricas.candidatos, 3);
   assert.equal(st77.metricas.errores, 0, 'las 25 filas históricas PAUSADO_CUOTA con errores=1 no inflan metricas.errores');
   assert.equal(st77.metricas.detalles.length, 3, 'las filas históricas PAUSADO_CUOTA vacías no contaminan detalles');
+  // La columna «Fuentes completas» del resumen es la cola, no los últimos
+  // estados de OrqFuentes. Una fila histórica OK puede no corresponder al
+  // estado final del trabajo.
+  const shCorridas77 = ss77.insertSheet('OrqCorridas');
+  shCorridas77.rows.push(['Run ID', 'Inicio', 'Fin', 'Estado', 'Fuentes totales', 'Fuentes completas',
+    'Comentarios/Avisos leidos', 'Repetidos', 'Clasificados', 'Solicitudes', 'Candidatos',
+    'Errores', 'Llamadas YouTube', 'Llamadas Gemini', 'Duración segundos']);
+  shCorridas77.rows.push([runId77, new Date('2026-04-17T23:50:47Z'), '', 'PAUSADO_CUOTA', 77,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+  // Simular un historial que dice OK para SRC-5 pese a que sigue PENDIENTE en cola.
+  env77.sheets.OrqFuentes.rows.push([
+    runId77, new Date(), 'SRC-5', 'Canal 5', 'youtube_canales', 'OK',
+    3, 0, 3, 0, 0, 0, 1, 1, 1.0, ''
+  ]);
+  env77.ctx.orqUpdateRunRow_(ss77, JSON.parse(env77.props.ORQ_RUN));
+  assert.equal(env77.sheets.OrqCorridas.rows[1][5], 3,
+    'fuentes completas deben coincidir con 3 trabajos COMPLETADO de OrqCola, no 4 filas OK históricas');
+
 });
 
 test('regresión seguridad: nueva corrida no puede sobrescribir ORQ_RUN pausada o recuperable', () => {
