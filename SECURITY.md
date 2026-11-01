@@ -15,3 +15,6 @@ Guardar claves operativas en Script Properties de Google Apps Script (y nunca en
 
 ## Despliegue
 `SISTEMA_ACTIVO=false` y envío automático desactivado durante pruebas. Habilitar componentes por separado después de validar tasas, duplicados, errores de API, recuperación tras fallos y monitoreo.
+
+## Estado público del repositorio y referencias STAGING (2026-11-01)
+El repositorio se verificó **público**. En una revisión parcial del código de desarrollo se observaron identificadores de recursos STAGING escritos en constantes y documentos históricos. No equivalen a claves secretas, pero deben revisarse permisos y exposición antes de publicar el proyecto como portfolio. No cambiar esas constantes sin preservar las comprobaciones de entorno y pruebas; eliminar valores en la rama actual **no los elimina del historial Git**. La auditoría de secretos realizada fue parcial y no certifica ausencia de credenciales.
