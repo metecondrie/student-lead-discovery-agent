@@ -303,12 +303,12 @@
   <!-- 1. Acción Principal de Búsqueda -->
   <section class="card">
     <h2>1. Búsqueda de alumnos multifuente</h2>
-    <p class="desc">Un único botón para activar la búsqueda en todas las fuentes operativas habilitadas (YouTube Canales, Foros RSS y Alertas docentes en Gmail). El proceso se reanuda de forma autónoma mediante triggers aunque cierres el navegador.</p>
+    <p class="desc">Primero prepará un piloto de cuatro fuentes con bajo costo. La búsqueda completa de las 77 fuentes queda como opción avanzada y requiere confirmación. Ninguna prueba se inicia automáticamente.</p>
 
     <div class="controls-grid">
       <label class="switch-label">
-        <input type="checkbox" id="runAllEnabled" checked>
-        <span>Recorrer todas las fuentes operativas habilitadas</span>
+        <input type="checkbox" id="runAllEnabled">
+        <span>Modo exhaustivo: recorrer todas las fuentes (consume más cuota)</span>
       </label>
       <div style="display:flex; gap:10px; align-items:center; justify-content:flex-end;">
         <label for="maxComments" style="font-size:13px; font-weight:600;">Máx. items por fuente:</label>
@@ -321,6 +321,9 @@
     </div>
 
     <div class="btn-row">
+      <button id="btnPilotPreview" class="btn btn-secondary" type="button" onclick="handlePreparePilot()">
+        Preparar piloto de 4 fuentes
+      </button>
       <button id="btnStart" class="btn btn-primary" type="button" onclick="handleStart()">
         ▶ Buscar alumnos
       </button>
@@ -480,6 +483,7 @@
 
 <script>
   let inFlight = false;
+  let pilotIds = []; // Selección explícita en la sesión del panel; no modifica Fuentes ni Script Properties.
   const $ = id => document.getElementById(id);
   const esc = str => String(str == null ? '' : str).replace(/[&<>"']/g, c => ({
     '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
@@ -504,6 +508,7 @@
 
     // Botones
     $('btnStart').disabled = running || inFlight;
+    $('btnPilotPreview').disabled = inFlight;
     $('btnStop').disabled = !running || inFlight;
     $('btnRefresh').disabled = inFlight;
     if ($('btnResume')) $('btnResume').style.display = data.estado === 'PAUSADO_CUOTA' ? 'inline-flex' : 'none';
@@ -600,14 +605,41 @@
     if (data.link) $('sheetLink').href = data.link;
   }
 
+  function handlePreparePilot() {
+    if (inFlight) return;
+    pilotIds = [];
+    setMessage('Comprobando las cuatro fuentes sin iniciar ninguna búsqueda…');
+    google.script.run
+      .withSuccessHandler(preview => {
+        pilotIds = Array.isArray(preview.fuentesListas) ? preview.fuentesListas.slice() : [];
+        $('runAllEnabled').checked = false;
+        const unavailable = (preview.fuentes || []).filter(s => !s.listaParaPiloto);
+        setMessage('Piloto preparado: ' + pilotIds.length + ' fuente(s). ' +
+          (unavailable.length ? 'No disponibles: ' + unavailable.map(s => s.id).join(', ') + '. ' : '') +
+          'No se ejecutó ninguna búsqueda. Para iniciarla, revisá la selección y pulsá Buscar alumnos.');
+      })
+      .withFailureHandler(err => setMessage(err && err.message ? err.message : 'No se pudo preparar el piloto.'))
+      .orqPreviewPilotoComercial();
+  }
+
   function handleStart() {
     if (inFlight) return;
+    const exhaustive = $('runAllEnabled').checked;
+    const sourceMode = exhaustive ? 'ALL_ENABLED' : pilotIds.slice();
+    if (!exhaustive && !sourceMode.length) {
+      setMessage('Prepará primero el piloto de cuatro fuentes. No se iniciará una búsqueda completa por defecto.');
+      return;
+    }
+    const question = exhaustive ?
+      '¿Confirmás iniciar la búsqueda exhaustiva en todas las fuentes habilitadas? Puede consumir bastante cuota.' :
+      '¿Confirmás iniciar el piloto de ' + sourceMode.length + ' fuente(s) seleccionadas?';
+    if (!window.confirm(question)) return;
+
     inFlight = true;
     setMessage('Iniciando búsqueda multifuente… El primer paso se procesa ahora.');
     $('btnStart').disabled = true;
 
     const maxCount = Number($('maxComments').value) || 15;
-    const sourceMode = $('runAllEnabled').checked ? 'ALL_ENABLED' : [];
 
     google.script.run
       .withSuccessHandler(res => {
