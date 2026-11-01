@@ -407,7 +407,11 @@ function orqStart(sourceIds, maxComments) {
   try {
     var ss = orqDb_(), cfg = orqLoadConfig_();
     var current = orqGetRun_();
-    if (current.estado === 'EJECUTANDO') throw new Error('Ya existe una búsqueda en curso (' + current.id + ').');
+    // No reemplazar ORQ_RUN mientras exista una corrida pausada o recuperable.
+    // Iniciar otra búsqueda en el mismo proyecto haría perder la referencia activa a esa cola.
+    if (['EJECUTANDO', 'PAUSADO_CUOTA', 'INCOMPLETO_RECUPERABLE'].indexOf(String(current.estado)) >= 0) {
+      throw new Error('Ya existe una búsqueda activa o pendiente de recuperación (' + current.id + ', ' + current.estado + '). Terminá o recuperá esa corrida antes de iniciar otra.');
+    }
 
     // Cargar fuentes del catálogo
     var all = orqSources_(ss);
