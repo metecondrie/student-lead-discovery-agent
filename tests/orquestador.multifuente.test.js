@@ -660,8 +660,9 @@ test('piloto: previsualización de cuatro fuentes es de solo lectura y detecta f
       '', true, 'gmail_autorizado', 'P0', 'DISPONIBLE', 'gmail_alertas', 'Alertas'],
     ['CAT-0066', 'Foros', 'UTNianos RSS', 'Matemática', 'UTN', 'https://www.utnianos.com.ar/foro/syndication.php',
       '', true, 'rss_publico', 'P1', 'DISPONIBLE', 'rss_foros', 'Foro público'],
-    ['CAT-0036', 'YouTube', 'Filadd UBA', 'Matemática', 'CBC', 'https://www.youtube.com/@FiladdUBA',
-      'Z5DyEohToDs', true, 'api_oficial', 'P2', 'DISPONIBLE', 'youtube_canales', 'Canal control']
+    ['CAT-0240', 'Solicitudes verificadas', 'Tablón revisado manualmente', 'Matemática', 'Universitario',
+      'https://www.tusclases.com.ar/buscar/alumnos.aspx', '', true, 'revision_manual', 'P0',
+      'DISPONIBLE', 'solicitudes_verificadas', 'Hoja del piloto']
   ];
   sourceRows.forEach(x => env.sheets.Fuentes.rows.push(x));
   const beforeRows = JSON.stringify(env.sheets.Fuentes.rows);
@@ -671,19 +672,19 @@ test('piloto: previsualización de cuatro fuentes es de solo lectura y detecta f
   assert.equal(plan.modo, 'SOLO_PREVISUALIZACION');
   assert.equal(plan.corridaModificada, false);
   assert.equal(plan.fuentes.length, 4);
-  assert.deepEqual(Array.from(plan.fuentesListas), ['CAT-0002', 'CAT-0086', 'CAT-0066', 'CAT-0036']);
+  assert.deepEqual(Array.from(plan.fuentesListas), ['CAT-0002', 'CAT-0086', 'CAT-0066', 'CAT-0240']);
   assert.equal(JSON.stringify(env.sheets.Fuentes.rows), beforeRows);
   assert.equal(JSON.stringify(env.props), beforeProps);
   assert.equal(env.triggers.length, 0);
   assert.equal(env.sheets.OrqCola, undefined);
 
   // Una fuente con fallo declarado NO es apta: el preview jamás la activa.
-  const ytRow = env.sheets.Fuentes.rows.find(r => r[0] === 'CAT-0036');
-  ytRow[12] = 'FALLO'; // columna nueva Estado Verificacion (en este fixture se crea explícitamente)
+  const manualRow = env.sheets.Fuentes.rows.find(r => r[0] === 'CAT-0240');
+  manualRow[12] = 'FALLO'; // columna nueva Estado Verificacion (en este fixture se crea explícitamente)
   env.sheets.Fuentes.rows[0][12] = 'Estado Verificacion';
   const after = env.ctx.orqPreviewPilotoComercial();
-  assert.equal(after.fuentes.find(x => x.id === 'CAT-0036').listaParaPiloto, false);
-  assert.ok(!Array.from(after.fuentesListas).includes('CAT-0036'));
+  assert.equal(after.fuentes.find(x => x.id === 'CAT-0240').listaParaPiloto, false);
+  assert.ok(!Array.from(after.fuentesListas).includes('CAT-0240'));
 });
 
 test('deduplicación Gmail: dos enlaces con tracking al mismo aviso de Tusclases comparten identidad', () => {
