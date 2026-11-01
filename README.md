@@ -7,6 +7,8 @@
 
 - [Inventario de las 77 fuentes activas y diagnóstico del embudo](docs/AUDITORIA_FUENTES_2026-11-01.md).
 - [Issue #11: reparar Gmail, priorizar fuentes con pedidos abiertos y reconciliar métricas](https://github.com/metecondrie/student-lead-discovery-agent/issues/11).
+- [Guía de inspección del Apps Script desplegado (HEAD, versión y comprobación local)](docs/VERIFICAR_DESPLIEGUE_APPS_SCRIPT_2026-11-01.md).
+- [Postmortem: 16 falsos completados y 0 candidatos en 77 fuentes](docs/POSTMORTEM_CORRIDA_77_2026-11-01.md).
 
 
 ## ¿Otra IA debe continuar el proyecto?
