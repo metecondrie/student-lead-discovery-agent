@@ -742,6 +742,63 @@ test('deduplicación Gmail: dos emails distintos del mismo aviso no gastan dos c
 });
 
 
+
+test('diagnóstico de contactos: compara cantidades de Gmail y Contactados sin exponer datos', () => {
+  const env = createMockEnv();
+  const ss = env.ctx.SpreadsheetApp.openById(STAGING);
+  const sh = ss.insertSheet('Contactados');
+  sh.rows.push(['Nombre', 'Materia', 'URL', 'Fecha', 'Nota']);
+  sh.rows.push(['Nombre privado', 'Matemática',
+    'https://www.tusclases.com.ar/estudiante-matematica/solicitud-2466634.aspx',
+    '2026-10-28', '']);
+
+  const mockReceipt = (id, num) => ({
+    getId: () => 'th-' + id,
+    getMessages: () => [{
+      getSubject: () => 'Mensaje desde tusclases.com.ar: confirmación',
+      getPlainBody: () => 'Tu mensaje se ha enviado correctamente. ' +
+        'https://www.tusclases.com.ar/estudiante-matematica/solicitud-' + num + '.aspx'
+    }]
+  });
+  env.ctx.GmailApp.search = q => {
+    if (/subject:"Mensaje desde tusclases/i.test(q)) {
+      return [mockReceipt('uno', '2466634'), mockReceipt('dos', '2466635')];
+    }
+    if (/^in:sent/.test(q)) return [];
+    return [];
+  };
+  const before = JSON.stringify(env.sheets.Contactados.rows);
+  const report = env.ctx.orqDiagnosticoContactosSoloLectura();
+  assert.equal(report.modo, 'SOLO_LECTURA');
+  assert.equal(report.contactosCRM, 1);
+  assert.equal(report.contactosCRMConIdentificador, 1);
+  assert.equal(report.confirmacionesGmail, 2);
+  assert.equal(report.anunciosUnicosConfirmaciones, 2);
+  assert.equal(report.anunciosConfirmadosNoRegistradosEnCRM, 1);
+  assert.equal(report.mensajeriaInternaVerificada, false);
+  assert.equal(report.fuentesConsultadas.gmailEnviados, true);
+  assert.equal(report.revisionIncompleta, false);
+  assert.equal(JSON.stringify(env.sheets.Contactados.rows), before);
+  assert.deepEqual(Object.keys(env.props).sort(), ['GEMINI_API_KEY','SHEET_ID','YOUTUBE_API_KEY'].sort());
+  assert.doesNotMatch(JSON.stringify(report), /Nombre privado|2466634|2466635|gmail\.com/i);
+});
+
+test('diagnóstico de contactos: fallo de Gmail exige etiqueta incompleta y conserva datos de CRM', () => {
+  const env = createMockEnv();
+  const ss = env.ctx.SpreadsheetApp.openById(STAGING);
+  const sh = ss.insertSheet('Contactados');
+  sh.rows.push(['Nombre', 'Materia', 'URL', 'Fecha', 'Nota']);
+  sh.rows.push(['Contacto privado', 'Química',
+    'https://www.tusclases.com.ar/estudiante-quimica/aviso-2466634.aspx', '', '']);
+  env.ctx.GmailApp.search = () => { throw new Error('Permiso vencido'); };
+  const report = env.ctx.orqDiagnosticoContactosSoloLectura();
+  assert.equal(report.revisionIncompleta, true);
+  assert.equal(report.contactosCRM, 1);
+  assert.equal(report.anunciosUnicosCRM, 1);
+  assert.equal(report.fuentesConsultadas.gmailRecibidos, false);
+  assert.equal(report.fuentesConsultadas.gmailEnviados, false);
+});
+
 test('control previo: identifica anuncios de Tusclases en enlaces directos y tracking codificado sin navegar', () => {
   const env = createMockEnv();
   const url = 'https://www.tusclases.com.ar/estudiante-matematica/pedido-2466634.aspx?utm_source=mail';
