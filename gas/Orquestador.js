@@ -387,11 +387,13 @@ function orqUpdateRunRow_(ss, run) {
   }
   if (idx < 0) return;
   var t = orqTotals_(ss, run.id);
+  // 'Fuentes completas' es el número de trabajos COMPLETADO en OrqCola, no
+  // la cantidad de registros históricos OK en OrqFuentes (pueden quedar obsoletos).
   var finished = ['FINALIZADO', 'DETENIDO', 'ERROR', 'PAUSADO_CUOTA', 'INCOMPLETO_RECUPERABLE'].indexOf(run.estado) >= 0;
   var now = new Date();
   var secs = Math.round((now.getTime() - new Date(run.inicio).getTime()) / 100) / 10;
   sh.getRange(idx, 1, 1, 15).setValues([[
-    run.id, new Date(run.inicio), finished ? now : '', run.estado, run.total, t.fuentes,
+    run.id, new Date(run.inicio), finished ? now : '', run.estado, run.total, t.completados,
     t.leidos, t.repetidos, t.clasificados, t.solicitudes, t.candidatos, t.errores,
     t.youtube, t.gemini, secs
   ]]);
