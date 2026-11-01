@@ -761,7 +761,7 @@ test('diagnóstico de contactos: compara cantidades de Gmail y Contactados sin e
     }]
   });
   env.ctx.GmailApp.search = q => {
-    if (/subject:"Mensaje desde tusclases/i.test(q)) {
+    if (/^newer_than:365d subject:"Mensaje desde tusclases/i.test(q)) {
       return [mockReceipt('uno', '2466634'), mockReceipt('dos', '2466635')];
     }
     if (/^in:sent/.test(q)) return [];
@@ -861,7 +861,7 @@ test('control previo: comprobante recibido de Tusclases bloquea contacto aunque 
   const url = 'https://www.tusclases.com.ar/estudiante-matematica/pedido-2466634.aspx';
   const ses = 'https://abc.awstrack.me/L0/' + encodeURIComponent(url) + '/44/hash';
   env.ctx.GmailApp.search = q => {
-    if (/subject:"Mensaje desde tusclases/i.test(q)) {
+    if (/^newer_than:365d subject:"Mensaje desde tusclases/i.test(q)) {
       return [{
         getId: () => 'receipt-thread',
         getMessages: () => [{
