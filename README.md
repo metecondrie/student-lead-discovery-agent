@@ -2,6 +2,13 @@
 
 **Estado al 2026-11-01:** prototipo en desarrollo y auditoría. **Repositorio actualmente público**; no almacenar datos de alumnos ni credenciales. La rama `main` es el punto de entrada documental, **no** la copia ejecutable más reciente del sistema.
 
+
+## Auditoría de fuentes y acciones prioritarias (2026-11-01)
+
+- [Inventario de las 77 fuentes activas y diagnóstico del embudo](docs/AUDITORIA_FUENTES_2026-11-01.md).
+- [Issue #11: reparar Gmail, priorizar fuentes con pedidos abiertos y reconciliar métricas](https://github.com/metecondrie/student-lead-discovery-agent/issues/11).
+
+
 ## ¿Otra IA debe continuar el proyecto?
 Leer, en este orden:
 1. [AGENTS.md](AGENTS.md) — reglas obligatorias y seguridad.
