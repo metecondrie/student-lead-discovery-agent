@@ -2,6 +2,13 @@
 
 **Fecha de corte:** 2026-11-01. Prototipo con código, panel de Apps Script y pruebas Node. **Repositorio público**; datos personales y credenciales prohibidos.
 
+
+## Auditoría de fuentes y acciones prioritarias (2026-11-01)
+
+- [Inventario de las 77 fuentes activas y diagnóstico del embudo](docs/AUDITORIA_FUENTES_2026-11-01.md).
+- [Issue #11: reparar Gmail, priorizar fuentes con pedidos abiertos y reconciliar métricas](https://github.com/metecondrie/student-lead-discovery-agent/issues/11).
+
+
 ## Retomar sin perder contexto
 1. [AGENTS.md](AGENTS.md) — normas para cualquier IA.
 2. [Estado actual](docs/ESTADO_ACTUAL.md) — fotografía de GitHub, Gmail/Sheets y STAGING, límites de verificación.
