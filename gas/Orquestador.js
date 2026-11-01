@@ -882,7 +882,7 @@ function orqExecuteRss_(ss, run, source) {
         // Fallback a evaluación por reglas para no perder items
         var ev = evaluate({ title: it.title, text: it.text, url: it.url, publishedAt: it.publishedAt, kind: 'tutoring' }, cfg, new Date(), {}, {});
         intention = ev.status !== 'Descartado';
-        candidate = (ev.compatible === 'alta' || ev.compatible === 'media') && intention;
+        candidate = (['alta', 'media'].indexOf(String(ev.compatible || '').toLowerCase()) >= 0) && intention;
         res.clasificados++;
         if (intention) res.solicitudes++;
         if (candidate) res.candidatos++;
@@ -1032,7 +1032,7 @@ function orqExecuteGmail_(ss, run, source) {
           // Evaluación por motor determinista de Core.js
           var ev = it._ev;
           intention = true;
-          candidate = (ev.compatible === 'alta' || ev.compatible === 'media');
+          candidate = (['alta', 'media'].indexOf(String(ev.compatible || '').toLowerCase()) >= 0);
           res.clasificados++;
           res.solicitudes++;
           if (candidate) res.candidatos++;
