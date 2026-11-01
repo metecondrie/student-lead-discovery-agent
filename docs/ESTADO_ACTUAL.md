@@ -66,3 +66,12 @@
 
 ## 6. Límites de la transferencia entre IAs
 GitHub conserva código y decisiones **documentadas**, no el historial completo de ChatGPT, Gmail, mensajes internos ni estado actual de Google Sheets/Apps Script. Una IA sin conectores autorizados debe pedir acceso o un resumen redactado: no debe inventar datos ni repetir contactos.
+
+## Cierre de etapa 3 — pruebas y próximos pasos (2026-11-01)
+
+- PR borrador [#12](https://github.com/metecondrie/student-lead-discovery-agent/pull/12): código y tests actualizados; CI pasó para el commit de código `51152cdb05f838b504f1823a421dd230307eb270`.
+- **Causas raíz históricas halladas** en `feature/orquestador-multifuente`: (a) objetos `GmailThread` en `run._gmailCache` serializado; (b) transición incondicional a `COMPLETADO` tras retorno de un conector, incluso si reportaba `ERROR_GMAIL` o `ERROR_RESOLUCION`.
+- Se agregaron `orqDiagnosticoSoloLectura()`, herramienta local para comparar versiones (sin red), tests de no modificación, deduplicación de avisos por ID de Tusclases y prueba para **no fusionar dos mensajes distintos de Superprof por tener la misma URL de perfil**.
+- CI ahora impide volver a introducir ambos patrones antiguos (`tests/deployment-regression-guard.test.js`).
+- **Sin despliegue en Apps Script ni modificaciones en Sheets:** no se pudieron consultar los contenidos de HEAD ni la versión inmutable desplegada con las conexiones disponibles. Seguir [guía de comparación](VERIFICAR_DESPLIEGUE_APPS_SCRIPT_2026-11-01.md), con acceso autorizado a la API Apps Script y sin divulgar el código/versiones privados.
+- Próximo paso seguro: obtener solo lectura de HEAD y la versión activa, comparar hashes y patrones, y recién después evaluar integración/despliegue del PR. No iniciar una nueva corrida ni contactar alumnos automáticamente.
