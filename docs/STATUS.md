@@ -1,29 +1,27 @@
-# Estado de implementación — 2026-10-30
+# STATUS — resumen ejecutivo del proyecto
 
-## Integrado en desarrollo
+**Última actualización documental: 2026-11-01.** Para la fotografía completa y trazable ver [ESTADO_ACTUAL.md](ESTADO_ACTUAL.md), que prevalece sobre documentos históricos.
 
-- Google Apps Script / Gmail / Sheets / RSS / YouTube.
-- Catálogo de 239 puntos de entrada, **todos desactivados salvo activación manual**.
-- Gemini 3.5 Flash-Lite, cola persistente y aprobación semántica conectada al flujo de oportunidades.
-- Contactabilidad multired, equivalentes ARS/USD solo con cotización vigente y perfiles docentes opcionales.
-- Sistema desactivado por defecto. No hay mensajes automáticos a estudiantes.
-- **90/90 pruebas locales simuladas aprobadas.**
+| Elemento | Estado confirmado o pendiente |
+| --- | --- |
+| Repositorio | **Público**; revisar privacidad antes de compartir información |
+| `main` | Documentación; no código de orquestación actual |
+| Rama con código candidato | `fix/orquestador-cuota-gmail-progreso-20261101` |
+| Pruebas locales | El README de desarrollo informa 90 tests simulados; **pendiente repetir `npm test`** en HEAD vigente |
+| Apps Script | Entorno STAGING y hojas de orquestación existentes; `/exec` y correspondencia de código **no revalidados** aquí |
+| Hojas operativas/STAGING | `SISTEMA_ACTIVO=FALSE` en ambas configuraciones leídas el 2026-11-01 |
+| Corrida de STAGING | Registro histórico `EJECUTANDO`: **estado real/trigger incierto**; preservar hasta verificación |
+| Captación Gmail/Tusclases | 10 contactos anteriores confirmados; no volver a recomendar como primer contacto |
+| Calidad de oportunidades | 3 alertas = 1 anuncio (tracking); aviso de alta Superprof = falso positivo |
+| YouTube/RSS/Gemini | Código/prototipos en ramas; permisos, cuotas y casos reales pendientes de revalidación |
+| Instagram/TikTok/Facebook | Estrategia de contenido, **no** rastreo general automatizado de terceros |
+| Contacto automático | **No autorizado** |
 
-## Limitaciones conocidas
+## Próximas acciones
+1. Verificar HEAD, diferencias con STAGING, cuota/API, trigger y cola pausada/obsoleta sin modificar datos.
+2. Corregir y probar deduplicación por ID de anuncio, falso positivo Superprof y cruce previo Gmail/Contactados.
+3. Correr tests y auditoría de seguridad; probar en copia y pedir aprobación antes de despliegues.
+4. Reanudar captación **manual** de alumnos nuevos verificados y medir reservas.
+5. Recién después considerar fusionar a `main`.
 
-- No se verificaron aún las credenciales, cuotas reales ni disponibilidad individual de las fuentes activables.
-- Instagram, TikTok, Facebook y otras plataformas restringidas **no** tienen conectores automáticos funcionales en esta versión.
-- La migración de una planilla existente requiere ensayo previo con una copia de los registros reales.
-- Las pruebas del conector YouTube se basan en respuestas simuladas; los IDs y comentarios requieren validación en vivo.
-- Faltan URL reales de perfiles docentes y verificar condiciones de publicación de las plataformas.
-- Antes de un despliegue, validar privacidad, tratamiento de datos de menores, reintentos, cuotas y supervisión.
-
-## Próxima etapa
-
-1. Revisar GitHub Actions.
-2. Probar permisos y cuotas de la API Gemini.
-3. Validar el conector YouTube con un video y sin publicar respuestas.
-4. Ensayar la migración de Sheets sin alterar el original.
-5. Piloto corto con revisión manual de los resultados.
-
-**No desplegar en producción todavía.**
+Documentos de entrada: [AGENTS.md](../AGENTS.md), [estrategia](ESTRATEGIA_CAPTACION.md), [hoja de ruta](ROADMAP.md).
