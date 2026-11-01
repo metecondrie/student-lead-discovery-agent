@@ -292,8 +292,8 @@ test('8. Persistencia tras reinicio de memoria RAM', () => {
 test('9. Historial inicial de los 4 contactos del 01/11/2026: dryRun e incorporación segura', () => {
   const env = createMockEnv();
 
-  // 1. Dry run: sólo lectura
-  const preview = env.ctx.orqSeedInitialContacts(env.ss, true);
+  // 1. Dry run: sólo lectura (con wrapper sin parámetros para el editor)
+  const preview = env.ctx.orqEjecutarPrevisualizacionContactosIniciales();
   assert.equal(preview.modo, 'SOLO_LECTURA');
   assert.equal(preview.total, 4);
   assert.equal(preview.aIncorporar, 4);

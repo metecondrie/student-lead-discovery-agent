@@ -2444,6 +2444,17 @@ function orqSeedInitialContacts(ss, dryRun) {
   return report;
 }
 
+/**
+ * Función auxiliar sin parámetros para ejecutar la previsualización de solo lectura
+ * de los cuatro contactos confirmados desde el editor de Google Apps Script.
+ * Modo SOLO LECTURA estricto: no escribe en Google Sheets ni altera ninguna hoja.
+ */
+function orqEjecutarPrevisualizacionContactosIniciales() {
+  var res = orqSeedInitialContacts(orqDb_(), true);
+  console.log('[PREVISUALIZACION CONTACTOS INICIALES (SOLO LECTURA)]:', JSON.stringify(res, null, 2));
+  return res;
+}
+
 
 
 function orqExecuteGmail_(ss, run, source, jobCursor) {
@@ -2973,6 +2984,7 @@ if (typeof module !== 'undefined') {
     orqExtractMessageBodies_: orqExtractMessageBodies_,
     orqDecodeBase64WebSafe_: orqDecodeBase64WebSafe_,
     orqSeedInitialContacts: orqSeedInitialContacts,
+    orqEjecutarPrevisualizacionContactosIniciales: orqEjecutarPrevisualizacionContactosIniciales,
     ORQ_INITIAL_CONTACTS_20261101: ORQ_INITIAL_CONTACTS_20261101
   };
 }
