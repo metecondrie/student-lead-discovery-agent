@@ -324,6 +324,9 @@
       <button id="btnPilotPreview" class="btn btn-secondary" type="button" onclick="handlePreparePilot()">
         Preparar piloto de 4 fuentes
       </button>
+      <button id="btnManualPreview" class="btn btn-secondary" type="button" onclick="handlePreviewManual()">
+        Revisar anuncios del piloto (sin ejecutar)
+      </button>
       <button id="btnStart" class="btn btn-primary" type="button" onclick="handleStart()">
         ▶ Buscar alumnos
       </button>
@@ -343,6 +346,7 @@
 
     <div id="statusMessage" class="alert-error" role="alert"></div>
     <p id="contactAuditSummary" class="desc" aria-live="polite">Control de contactos: todavía no consultado. No se envía ningún mensaje.</p>
+    <p id="manualPreviewSummary" class="desc" aria-live="polite">Solicitudes verificadas: consultar la hoja del piloto antes de activar el conector manual. No se realiza scraping.</p>
 
     <div class="notice">
       <strong>Transparencia de fuentes:</strong> Las plataformas sin API autorizada (Facebook Groups, Reels de Instagram ajenos, TikTok y Reddit sin clave) permanecen registradas en el catálogo maestro (239 entradas), pero <strong>no se simulan búsquedas falsas</strong> en ellas para no violar sus condiciones de uso.
@@ -513,6 +517,7 @@
     // Botones
     $('btnStart').disabled = running || inFlight;
     $('btnPilotPreview').disabled = inFlight;
+    $('btnManualPreview').disabled = inFlight;
     $('btnContactAudit').disabled = inFlight;
     $('btnStop').disabled = !running || inFlight;
     $('btnRefresh').disabled = inFlight;
@@ -608,6 +613,32 @@
 
     // Enlace a planilla
     if (data.link) $('sheetLink').href = data.link;
+  }
+
+  function handlePreviewManual() {
+    if (inFlight) return;
+    pilotIds = [];
+    $('runAllEnabled').checked = false;
+    $('manualPreviewSummary').textContent = 'Revisando la hoja manual sin ejecutar Gemini ni contactar alumnos…';
+    google.script.run
+      .withSuccessHandler(report => {
+        $('manualPreviewSummary').textContent =
+          'Piloto manual: ' + report.examinados + ' fichas, ' +
+          report.preseleccionados + ' preseleccionadas; ' +
+          report.omitidosEstado + ' excluidas por estado; ' +
+          report.sinFechaOAntiguos + ' sin fecha o antiguas; ' +
+          report.invalidos + ' inválidas. ' +
+          'No se verificó permiso de contacto ni elegibilidad internacional. ' +
+          'Para ejecutar luego de validar el despliegue, activá expresamente CAT-0240 ' +
+          'en STAGING y prepará el piloto. Esta consulta no ejecutó nada.';
+      })
+      .withFailureHandler(err => {
+        $('manualPreviewSummary').textContent =
+          'No se pudo leer la hoja del piloto: ' +
+          (err && err.message ? err.message : 'error desconocido') +
+          '. No se ejecutó la búsqueda.';
+      })
+      .orqPreviewSolicitudesVerificadas();
   }
 
   function handlePreparePilot() {
