@@ -1594,6 +1594,30 @@ test('Auditoría 5 Gemini: buildGeminiPrompt y parseGeminiResponse procesan lote
   assert.strictEqual(core.parseGeminiResponse('{"no_array": true}'), null);
 });
 
+test('seguridad Gemini: enums inventados nunca convierten la solicitud en contacto permitido', () => {
+  const input = [
+    { id: 'unrecognized', es_solicitud_clases: true,
+      destinatario: 'puede_contactar_a_cualquiera', contactabilidad: 'whatsap_privado_automatico',
+      oportunidad_comercial_alejo: true, confianza: 0.99 },
+    { id: 'unknown', es_solicitud_clases: true,
+      destinatario: 'desconocido', contactabilidad: 'canal_publico_permitido',
+      oportunidad_comercial_alejo: true, confianza: 0.99 },
+    { id: 'missing', es_solicitud_clases: true,
+      oportunidad_comercial_alejo: true, confianza: 0.99 },
+    { id: 'valid', es_solicitud_clases: true,
+      destinatario: 'pedido_abierto', contactabilidad: 'canal_publico_permitido',
+      oportunidad_comercial_alejo: true, confianza: 0.96 }
+  ];
+  const out = core.parseGeminiResponse(JSON.stringify(input));
+  assert.equal(out.length, 4);
+  assert.equal(out[0].destinatario, 'ambiguo');
+  assert.equal(out[0].contactabilidad, 'no_verificada');
+  assert.equal(out[0].oportunidad_comercial_alejo, false);
+  assert.equal(out[1].oportunidad_comercial_alejo, false);
+  assert.equal(out[2].oportunidad_comercial_alejo, false);
+  assert.equal(out[3].oportunidad_comercial_alejo, true);
+});
+
 test('Auditoría 5 Gemini integración: cola persistente _cola_ia y procesamiento por lotes con callGeminiBatch_', () => {
   const env = makeEnv({
     threads: [],
