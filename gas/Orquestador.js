@@ -1781,10 +1781,10 @@ function orqExecuteGmail_(ss, run, source, jobCursor) {
       var query = 'newer_than:7d ';
 
       if (plat.indexOf('tusclases') >= 0 || url.indexOf('tusclases') >= 0 || name.indexOf('tusclases') >= 0) {
-        query += 'from:(tusclases.com.ar OR tusclasesparticulares.com OR noreply@tusclases.com.ar)';
-        if (source.topics && /quimica|fisica|matematica|biologia/i.test(source.topics)) {
-          query += ' ' + source.topics.split(';')[0].trim();
-        }
+        // Una misma alerta puede contener varios alumnos de distintas materias.
+        // NO aplicar source.topics como búsqueda Gmail: perderíamos solicitudes.
+        // Los comprobantes de contacto saliente se auditan aparte y no son leads.
+        query += 'from:(tusclases.com.ar OR tusclasesparticulares.com OR noreply@tusclases.com.ar) -subject:"Mensaje desde tusclases.com.ar"';
       } else if (plat.indexOf('superprof') >= 0 || url.indexOf('superprof') >= 0 || name.indexOf('superprof') >= 0) {
         query += 'from:(superprof.com.ar OR superprof.es OR superprof.co OR superprof.com)';
       } else if (name.indexOf('google alerts') >= 0 || name.indexOf('alertas') >= 0) {
