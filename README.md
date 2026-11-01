@@ -9,7 +9,7 @@ Leer, en este orden:
 3. [Estrategia de captación](docs/ESTRATEGIA_CAPTACION.md) — clases, canales, precios de referencia y prioridades.
 4. [Seguridad](SECURITY.md), [hoja de ruta](docs/ROADMAP.md) y documentación técnica de **la rama de desarrollo**.
 
-**Rama de código más avanzada verificada a esta fecha:** [`fix/orquestador-cuota-gmail-progreso-20261101`](../../tree/fix/orquestador-cuota-gmail-progreso-20261101). Su último commit de código auditado documentalmente es `5d33e1510628a3ed0c2e2d87df38c6b30bcaa97f`. Existen commits posteriores de documentación y podrían existir otros cambios futuros; comprobar GitHub antes de empezar. El código de Apps Script, panel y pruebas Node está en esa rama, no en `main`.
+**Rama de código más avanzada verificada a esta fecha:** [`fix/orquestador-cuota-gmail-progreso-20261101`](https://github.com/metecondrie/student-lead-discovery-agent/tree/fix/orquestador-cuota-gmail-progreso-20261101). Su último commit de código auditado documentalmente es `5d33e1510628a3ed0c2e2d87df38c6b30bcaa97f`. Existen commits posteriores de documentación y podrían existir otros cambios futuros; comprobar GitHub antes de empezar. El código de Apps Script, panel y pruebas Node está en esa rama, no en `main`.
 
 ## Para qué sirve
 Busca solicitudes explícitas y pertinentes de clases particulares de Matemática, Física, Química y Biología (secundaria, ingresos y universidad), prioritariamente **100 % online**. Propone oportunidades para revisión **humana**; **no contacta automáticamente estudiantes**.
