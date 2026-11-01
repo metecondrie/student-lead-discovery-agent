@@ -2134,8 +2134,11 @@ function orqStatus() {
   var candidates = [];
   if (run.id && ss.getSheetByName('OrqHallazgos')) {
     orqRows_(ss.getSheetByName('OrqHallazgos')).forEach(function(r) {
-      if (String(r[0]) === run.id && String(r[11]) === 'REVISAR') {
+      if (String(r[0]) === run.id &&
+          (String(r[11]) === 'REVISAR' || String(r[11]) === 'VERIFICAR_CONTACTO')) {
         candidates.push({
+          estadoContacto: String(r[11]) === 'VERIFICAR_CONTACTO' ?
+            'PENDIENTE_VERIFICAR_EN_PLATAFORMA' : 'SIN_AUDITORIA_HISTORICA',
           plataforma: String(r[2] || ''),
           fuente: String(r[3] || ''),
           id: String(r[4] || ''),
