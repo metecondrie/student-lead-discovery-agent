@@ -85,3 +85,13 @@ GitHub conserva código y decisiones **documentadas**, no el historial completo 
 - **Pruebas:** casos sintéticos cubren CRM, comprobantes, seguimiento codificado, errores de Gmail, no duplicación, privacidad y modo piloto seguro. Verificar CI del último commit de la rama.
 - **Bloqueante:** estas funcionalidades no están instaladas en STAGING. Primero comprobar HEAD, deployment y triggers con acceso autorizado a Apps Script; [guía](VERIFICAR_DESPLIEGUE_APPS_SCRIPT_2026-11-01.md).
 
+
+## Etapa 5 — consulta Gmail corregida y verificador de despliegue (2026-11-01)
+
+- **Verificación de Gmail (agregados, sin datos personales):** la búsqueda general de Tusclases durante los 7 días recientes devolvió 17 hilos, pero excluyendo por asunto «Mensaje desde tusclases.com.ar» se redujo a 6; entre los 6 había 3 alertas de alumnos. El filtro adicional «Química» perdía esas 3 alertas.
+- **Cambio probado en GitHub:** la consulta de Tusclases **ya no añade un filtro por materia**, porque los boletines contienen estudiantes de varias materias; excluye explícitamente los comprobantes de envío saliente para no ocupar el cupo de 15 hilos por fuente. La clasificación por materia se hace después. Se agregó prueba de regresión.
+- **Nuevo verificador local:** `tools/verificar-staging-solo-lectura.ps1` en [rama PR #12](https://github.com/metecondrie/student-lead-discovery-agent/pull/12). Clona HEAD y opcionalmente versión inmutable a carpetas temporales privadas y los compara mediante el analizador offline; no ejecuta `push`, `deploy` o triggers. Ver [instrucciones](VERIFICAR_DESPLIEGUE_APPS_SCRIPT_2026-11-01.md).
+- La batería de CI pasó en el commit de código/pruebas `d40fbf996b60aa0075f08d7e6b7cfff069421e0f` (**159 tests**). Las validaciones son simuladas; no equivalen a desplegar ni verificar Apps Script real.
+- **Bloqueante único de integración:** ejecutar el verificador desde una computadora conectada a la cuenta de Google de STAGING con `clasp` autenticado; confirmar el `versionNumber` que corresponde al web app antes de ejecutarlo. Luego inspeccionar estado real de triggers/cola antes de habilitar piloto.
+- No se hicieron cambios en la planilla STAGING, Script Properties, despliegues ni mensajes a terceros.
+
