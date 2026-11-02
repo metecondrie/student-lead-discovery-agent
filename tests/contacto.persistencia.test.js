@@ -1043,3 +1043,253 @@ test('21. Diagnóstico escalonado (etapas): detalla búsqueda, lectura, decodifi
   const serialized = JSON.stringify(report);
   assert.doesNotMatch(serialized, /2466158|2466833|notificaciones@|@tusclases/i);
 });
+
+test('22. Extracción dirigida de comprobantes: orqExtractReceiptTargetAdKey_ aísla el anuncio contactado y descarta recomendaciones y pie de página', () => {
+  const env = createMockEnv();
+  const extract = env.ctx.orqExtractReceiptTargetAdKey_;
+
+  // Caso 1: Correo con ancla "Tu mensaje al anunciante de" y bloque de recomendaciones con otros anuncios
+  const htmlWithRecs = `
+    <table width="100%">
+      <tr><td>Tu mensaje al anunciante de: Química se ha enviado correctamente.</td></tr>
+      <tr><td><a href="https://r.email.tusclases.co/L0/https%3A%2F%2Fwww.tusclases.co%2Festudiantes%2Fquimica%2Fsolicitud-2466833.aspx/1/hash/aaa">Ver solicitud</a></td></tr>
+    </table>
+    <div class="recomendaciones">
+      <h3>Otros alumnos que buscan clases:</h3>
+      <a href="https://www.tusclases.co/avisos/2499001.aspx">Ver alumno 1</a>
+      <a href="https://www.tusclases.co/avisos/2499002.aspx">Ver alumno 2</a>
+    </div>
+    <footer>
+      <a href="https://www.tusclases.co/avisos/2499003.aspx">Aviso Footer</a>
+    </footer>
+  `;
+  const res1 = extract(htmlWithRecs, 'Mensaje desde tusclases.co: Consulta recibida de Química');
+  assert.equal(res1.key, 'tusclases.co:2466833');
+  assert.equal(res1.status, 'UNICO_CONTEXTUAL');
+  assert.equal(res1.allKeys.length, 1);
+  assert.equal(res1.allKeys[0], 'tusclases.co:2466833');
+
+  // Caso 2: Correo chileno con AWS track y "Quizás te interese"
+  const htmlCl = `
+    <div>
+      <p>Tu mensaje al anunciante de: Álgebra se ha enviado correctamente.</p>
+      <a href="https://awstrack.me/L0/https%3A%2F%2Fwww.tusclasesparticulares.cl%2Favisos%2Falgebra-2466158.aspx/1">Ver</a>
+    </div>
+    <div class="sidebar">
+      <p>Quizás te interese:</p>
+      <a href="https://www.tusclasesparticulares.cl/avisos/2499010.aspx">Otro</a>
+    </div>
+  `;
+  const res2 = extract(htmlCl, 'Mensaje desde tusclasesparticulares: Consulta Álgebra');
+  assert.equal(res2.key, 'tusclasesparticulares.cl:2466158');
+  assert.equal(res2.status, 'UNICO_CONTEXTUAL');
+
+  // Caso 3: Mensaje ambiguo con dos anuncios distintos en la misma sección sin desambiguación en asunto
+  const htmlAmbiguo = `
+    <p>Tu mensaje se ha enviado correctamente.</p>
+    <a href="https://www.tusclases.co/solicitud/1111111.aspx">Anuncio A</a>
+    <a href="https://www.tusclases.co/solicitud/2222222.aspx">Anuncio B</a>
+  `;
+  const res3 = extract(htmlAmbiguo, 'Mensaje desde tusclases.co: Consulta general');
+  assert.equal(res3.key, null);
+  assert.equal(res3.status, 'AMBIGUO_REVISION_MANUAL');
+  assert.equal(res3.allKeys.length, 2);
+
+  // Caso 4: Mensaje ambiguo en cuerpo resuelto inequívocamente por asunto con ID
+  const res4 = extract(htmlAmbiguo, 'Mensaje desde tusclases.co: 1111111');
+  assert.equal(res4.key, 'tusclases.co:1111111');
+  assert.ok(res4.status.startsWith('RESUELTO_POR_ASUNTO'));
+
+  // Caso 5: Correo sin identificador
+  const res5 = extract('<p>Tu mensaje se ha enviado correctamente pero no hay enlaces.</p>', 'Mensaje desde tusclases');
+  assert.equal(res5.key, null);
+  assert.equal(res5.status, 'SIN_IDENTIFICADOR');
+});
+
+test('23. Diagnóstico ante correos con recomendaciones: 5 comprobantes contaminados producen exactamente 4 anuncios únicos y conteos exactos por país', () => {
+  const env = createMockEnv();
+
+  const makeFullMessageResource = (msgId, threadId, sub, plainBody, htmlBody) => ({
+    id: msgId,
+    threadId: threadId,
+    internalDate: '1730476800000',
+    payload: {
+      mimeType: 'multipart/alternative',
+      headers: [
+        { name: 'Subject', value: sub },
+        { name: 'From', value: 'notificaciones@tusclases.com' }
+      ],
+      parts: [
+        {
+          mimeType: 'text/plain',
+          body: {
+            data: Buffer.from(plainBody, 'utf8').toString('base64url')
+          }
+        },
+        {
+          mimeType: 'text/html',
+          body: {
+            data: Buffer.from(htmlBody, 'utf8').toString('base64url')
+          }
+        }
+      ]
+    }
+  });
+
+  const footerNoise = `
+    <div class="recomendaciones">
+      <h3>Otros alumnos que buscan clases:</h3>
+      <a href="https://awstrack.me/L0/https%3A%2F%2Fwww.tusclasesparticulares.cl%2Favisos%2F2499001.aspx/1">Alumno Rec 1</a>
+      <a href="https://awstrack.me/L0/https%3A%2F%2Fwww.tusclasesparticulares.cl%2Favisos%2F2499002.aspx/1">Alumno Rec 2</a>
+    </div>
+    <footer>
+      <a href="https://www.tusclases.co/avisos/2499003.aspx">Footer Rec</a>
+    </footer>
+  `;
+
+  const mockThreads = {
+    'th-col-2466833-a': {
+      id: 'th-col-2466833-a',
+      messages: [makeFullMessageResource(
+        'm-col-a', 'th-col-2466833-a',
+        'Mensaje desde tusclases.co: Consulta recibida de Química',
+        'Tu mensaje al anunciante de: Química se ha enviado correctamente.',
+        '<table width="100%"><tr><td>Tu mensaje al anunciante de: Química se ha enviado correctamente.</td>' +
+        '<td><a href="https://r.email.tusclases.co/L0/https%3A%2F%2Fwww.tusclases.co%2Festudiantes%2Fquimica%2Fsolicitud-2466833.aspx/1/hash/aaa">Ver</a></td></tr></table>' +
+        footerNoise
+      )]
+    },
+    'th-col-2466833-b': {
+      id: 'th-col-2466833-b',
+      messages: [makeFullMessageResource(
+        'm-col-b', 'th-col-2466833-b',
+        'Mensaje desde tusclases.co: Confirmación de envío de Química',
+        'Tu mensaje al anunciante de: Química se ha enviado correctamente.',
+        '<div style="width: 100%;"><p>Tu mensaje se ha enviado correctamente.</p>' +
+        '<a href="https://awstrack.me/L0/https%3A%2F%2Fwww.tusclases.co%2Festudiantes%2Fquimica%2Fsolicitud-2466833.aspx/2/hash/bbb">Ver</a></div>' +
+        footerNoise
+      )]
+    },
+    'th-cl-2466158': {
+      id: 'th-cl-2466158',
+      messages: [makeFullMessageResource(
+        'm-cl-1', 'th-cl-2466158',
+        'Mensaje desde tusclasesparticulares: Consulta Álgebra',
+        'Tu mensaje al anunciante de: Álgebra se ha enviado correctamente.',
+        '<table width="100%"><tr><td>Tu mensaje al anunciante de: Álgebra se ha enviado correctamente.</td>' +
+        '<td><a href="https://email.tusclasesparticulares.cl/L0/https%3A%2F%2Fwww.tusclasesparticulares.cl%2Favisos%2Falgebra-2466158.aspx/1/hash/ccc">Ver</a></td></tr></table>' +
+        footerNoise
+      )]
+    },
+    'th-cl-2466516': {
+      id: 'th-cl-2466516',
+      messages: [makeFullMessageResource(
+        'm-cl-2', 'th-cl-2466516',
+        'Mensaje desde tusclasesparticulares: Consulta Cálculo',
+        'Tu mensaje al anunciante de: Cálculo se ha enviado correctamente.',
+        '<table width="100%"><tr><td>Tu mensaje al anunciante de: Cálculo se ha enviado correctamente.</td>' +
+        '<td><a href="https://awstrack.me/L0/https%3A%2F%2Fwww.tusclasesparticulares.cl%2Fprofesores%2Fcalculo-2466516.aspx/1/hash/ddd">Ver</a></td></tr></table>' +
+        footerNoise
+      )]
+    },
+    'th-cl-2465382': {
+      id: 'th-cl-2465382',
+      messages: [makeFullMessageResource(
+        'm-cl-3', 'th-cl-2465382',
+        'Mensaje desde tusclasesparticulares: Consulta Física',
+        'Tu mensaje al anunciante de: Física se ha enviado correctamente.',
+        '<table width="100%"><tr><td>Tu mensaje al anunciante de: Física se ha enviado correctamente.</td>' +
+        '<td><a href="https://awstrack.me/L0/https%3A%2F%2Fwww.tusclasesparticulares.cl%2Falumnos%2Ffisica-2465382.aspx/1/hash/eee">Ver</a></td></tr></table>' +
+        footerNoise
+      )]
+    }
+  };
+
+  env.ctx.Gmail = {
+    Users: {
+      Threads: {
+        list: (userId, params) => {
+          if (params && params.q && params.q.indexOf('in:sent') >= 0) {
+            return { threads: [] };
+          }
+          return { threads: Object.keys(mockThreads).map(id => ({ id })) };
+        },
+        get: (u, id) => mockThreads[id] || null
+      }
+    }
+  };
+
+  const report = env.ctx.orqEjecutarDiagnosticoContactos();
+  assert.equal(report.confirmacionesGmail, 5, 'Exactamente 5 comprobantes');
+  assert.equal(report.anunciosUnicosConfirmaciones, 4, 'Exactamente 4 anuncios únicos (no 18 por recomendaciones)');
+  assert.equal(report.confirmacionesSinIdentificador, 0);
+  assert.equal(report.confirmacionesAmbiguas, 0);
+  assert.equal(report.revisionIncompleta, false);
+
+  // Verificación de contadores por país: deben sumar exactamente 5 (2 Colombia + 3 Chile)
+  assert.equal(report.etapas.extraccion.anunciosPorPais.CO, 2);
+  assert.equal(report.etapas.extraccion.anunciosPorPais.CL, 3);
+  const totalPais = Object.keys(report.etapas.extraccion.anunciosPorPais)
+    .reduce((sum, c) => sum + report.etapas.extraccion.anunciosPorPais[c], 0);
+  assert.equal(totalPais, 5, 'La suma de identificaciones por país debe ser exactamente 5, sin inflación por recomendaciones');
+
+  // Verificar que los anuncios recomendados NO se marcaron como contactados
+  const hist = env.ctx.orqContactHistory_(env.ss);
+  assert.equal(env.ctx.orqIsContacted_({ url: 'https://www.tusclasesparticulares.cl/avisos/2499001.aspx' }, hist), false);
+  assert.equal(env.ctx.orqIsContacted_({ url: 'https://www.tusclasesparticulares.cl/avisos/2499002.aspx' }, hist), false);
+  assert.equal(env.ctx.orqIsContacted_({ url: 'https://www.tusclases.co/avisos/2499003.aspx' }, hist), false);
+
+  // Y los 4 reales sí se marcaron como confirmados
+  assert.equal(env.ctx.orqContactDecision_({ url: 'https://www.tusclases.co/solicitud/2466833.aspx' }, hist), 'CONTACTADO_CONFIRMADO');
+  assert.equal(env.ctx.orqContactDecision_({ url: 'https://www.tusclasesparticulares.cl/avisos/2466158.aspx' }, hist), 'CONTACTADO_CONFIRMADO');
+  assert.equal(env.ctx.orqContactDecision_({ url: 'https://www.tusclasesparticulares.cl/profesores/2466516.aspx' }, hist), 'CONTACTADO_CONFIRMADO');
+  assert.equal(env.ctx.orqContactDecision_({ url: 'https://www.tusclasesparticulares.cl/alumnos/2465382.aspx' }, hist), 'CONTACTADO_CONFIRMADO');
+});
+
+test('24. Manejo fail-closed de correos ambiguos: marca revisión manual incompleta sin registrar contactos espurios', () => {
+  const env = createMockEnv();
+
+  const mockThreads = {
+    'th-ambiguo': {
+      id: 'th-ambiguo',
+      messages: [{
+        id: 'm-amb',
+        threadId: 'th-ambiguo',
+        internalDate: '1730476800000',
+        payload: {
+          mimeType: 'text/html',
+          headers: [{ name: 'Subject', value: 'Mensaje desde tusclases.co: Consulta' }],
+          body: {
+            data: Buffer.from('<p>Tu mensaje se ha enviado correctamente.</p>' +
+              '<a href="https://www.tusclases.co/solicitud/1111111.aspx">A</a>' +
+              '<a href="https://www.tusclases.co/solicitud/2222222.aspx">B</a>', 'utf8').toString('base64url')
+          }
+        }
+      }]
+    }
+  };
+
+  env.ctx.Gmail = {
+    Users: {
+      Threads: {
+        list: (userId, params) => {
+          if (params && params.q && params.q.indexOf('in:sent') >= 0) return { threads: [] };
+          return { threads: Object.keys(mockThreads).map(id => ({ id })) };
+        },
+        get: (u, id) => mockThreads[id] || null
+      }
+    }
+  };
+
+  const report = env.ctx.orqEjecutarDiagnosticoContactos();
+  assert.equal(report.confirmacionesGmail, 1);
+  assert.equal(report.anunciosUnicosConfirmaciones, 0, 'No debe registrar ninguno de los dos anuncios ambiguos');
+  assert.equal(report.confirmacionesAmbiguas, 1, 'Debe registrar 1 comprobante ambiguo');
+  assert.equal(report.revisionIncompleta, true, 'Debe marcar revisión incompleta para requerir verificación humana');
+
+  // Comprobar sincronización: tampoco debe escribir filas en Contactados
+  const syncRes = env.ctx.orqSyncContactReceipts(30, false);
+  assert.equal(syncRes.ambiguos, 1);
+  assert.equal(syncRes.nuevosContactosIncorporados, 0);
+  assert.equal(env.sheets.Contactados.rows.length, 1, 'Conserva exactamente 1 fila (solo cabecera)');
+});

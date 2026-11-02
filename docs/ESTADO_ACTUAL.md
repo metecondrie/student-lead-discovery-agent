@@ -2,6 +2,27 @@
 
 **Corte verificable de esta fotografía: 2026-11-01.** Este documento es un resumen para retomar el proyecto, **no** una verificación automática permanente. Actualizarlo tras cada cambio importante.
 
+## Corrección de sobreextracción en comprobantes Gmail (2026-11-01)
+
+- **Evidencia observada en prueba real STAGING post-parche MIME:** 16 confirmaciones Gmail, 16 cuerpos HTML recuperados, 0 snippets utilizados, 0 mensajes sin identificador y `revisionIncompleta: false`. Sin embargo, los 16 comprobantes producían 18 anuncios únicos y la suma de identificaciones por país sumaba 30.
+- **Causa raíz:** `orqContactHistory_` y `orqSyncContactReceipts` barrían el cuerpo HTML completo con `orqTusclasesAdKeys_` sin delimitar la sección del comprobante. Los correos de Tusclases incluyen bloques secundarios de recomendaciones («Otros alumnos que buscan clases...», «Quizás te interese...») y pie de página con enlaces a otros anuncios, incorporando falsos positivos como anuncios contactados.
+- **Solución implementada:** función `orqExtractReceiptTargetAdKey_(body, subject)`:
+  1. Localiza el ancla de confirmación principal («Tu mensaje al anunciante de...», «se ha enviado correctamente»).
+  2. Delimita una ventana contextual alrededor del ancla y recorta secciones secundarias de recomendaciones y pie de página.
+  3. Si la ventana contextual contiene exactamente 1 clave única, la extrae como clave objetivo (`UNICO_CONTEXTUAL`).
+  4. Si hay múltiples claves en conflicto, intenta desambiguar por asunto/ID; si persiste la ambigüedad, devuelve estado `AMBIGUO_REVISION_MANUAL` con clave `null` (fail-closed, no registra contactos espurios e incrementa `confirmacionesAmbiguas` marcando `revisionIncompleta = true`).
+  5. Se actualizó `orqContactHistory_` y `orqSyncContactReceipts` para procesar exclusivamente la clave objetivo.
+  6. Se corrigió coincidencia de subcadena `.co` en comprobación de dominio en `orqContactDecision_`.
+- **Batería de pruebas:** 205 pruebas aprobadas (`npm test`), con 3 pruebas nuevas de regresión contra sobreextracción, recomendaciones secundarias y manejo fail-closed de ambigüedad.
+- **Estado local:** código listo en el árbol de trabajo local, sin `git push`, sin `clasp push`, sin modificaciones en Sheets y sin triggers.
+
+## Gmail MIME — diagnóstico y corrección local (2026-11-01)
+
+- Base local: rama `feature/entrada-solicitudes-verificadas-20261101`, HEAD `ae0e23f`; la corrección y las pruebas están sin confirmar en el árbol de trabajo.
+- Dos diagnósticos autorizados en STAGING, de solo lectura y sin registrar contenido: 17 hilos, 20 mensajes y 16 asuntos coincidentes. Los 16 cuerpos HTML eran arreglos de bytes con tamaño coincidente; todos se interpretaron como HTML UTF-8 y el decodificador anterior devolvió vacío en los 16. No había `attachmentId` en esas partes.
+- `orqDecodeBase64WebSafe_` convierte directamente los arreglos de bytes a UTF-8 y conserva el tratamiento anterior de cadenas Base64URL. Las pruebas sintéticas cubren partes anidadas, ambos formatos y el flujo de 16 confirmaciones. `npm test`: **202 pruebas aprobadas**.
+- El archivo de diagnóstico temporal se retiró del proyecto STAGING; quedó una copia local en `scratch/diagnostico-gmail-mime.js`. No se desplegó la corrección ni se modificaron Sheets, disparadores o producción. Una validación real de la corrección requiere autorización adicional.
+
 ## Novedad técnica posterior — 2026-11-01
 
 - **Diagnóstico de fuentes:** [auditoría e inventario de 77 fuentes](AUDITORIA_FUENTES_2026-11-01.md); 0 candidatos y fallos concretos en Gmail, resolución de canales y métricas.
