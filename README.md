@@ -18,12 +18,18 @@
 3. [Estrategia de captación](docs/ESTRATEGIA_CAPTACION.md).
 4. [Roadmap](docs/ROADMAP.md), [seguridad](SECURITY.md) y documentación técnica de esta rama.
 
-**Rama técnica de referencia para continuar:** `fix/auditoria-criticos-20261101` ([PR #14](https://github.com/metecondrie/student-lead-discovery-agent/pull/14) contra `fix/gmail-diagnostico-y-piloto-20261101`, [PR #12](https://github.com/metecondrie/student-lead-discovery-agent/pull/12)). La rama `feature/auditoria-descartes-manual` conserva funciones que **no** se integraron todavía. Consultar el SHA y el CI vigentes; no usar `main` como si tuviera el código.
+**Rama técnica candidata para continuar:** `feature/entrada-solicitudes-verificadas-20261101` ([PR #15](https://github.com/metecondrie/student-lead-discovery-agent/pull/15), sobre [PR #14](https://github.com/metecondrie/student-lead-discovery-agent/pull/14) y [PR #12](https://github.com/metecondrie/student-lead-discovery-agent/pull/12)). La rama `feature/auditoria-descartes-manual` conserva funciones que **no** se integraron todavía. Consultar el SHA y el CI vigentes; no usar `main` como si tuviera el código.
 
 ## Estado de auditorías y seguridad (2026-11-01)
 - [Comparación de dos auditorías externas y correcciones del PR #14](docs/AUDITORIAS_COMPARADAS_Y_CORRECCIONES_2026-11-01.md).
 - **Bloqueante de despliegue:** revisar que el web app no sea accesible a terceros ejecutando como propietario. Ver [checklist](docs/VERIFICAR_DESPLIEGUE_APPS_SCRIPT_2026-11-01.md).
 - Motor legacy `runCycle`: **no reactivar** hasta igualar la protección anti doble contacto del orquestador. El fallback oculto YouTube y la simulación con consumo real se corrigieron solo en PR #14.
+
+## Piloto real de solicitudes verificadas (sin scraping)
+- [Instrucciones de funcionamiento, estado STAGING y criterios de despliegue](docs/PILOTO_SOLICITUDES_VERIFICADAS_2026-11-01.md).
+- **Hoja STAGING:** `Piloto_Demanda_20261101`, con ocho avisos revisados. **Fuente:** `CAT-0240`, `solicitudes_verificadas`, **Activo=FALSE**; el código permanece sin desplegar.
+- **171/171 tests simulados aprobados** en [GitHub Actions](https://github.com/metecondrie/student-lead-discovery-agent/actions/runs/41341064887), en SHA `d1ed8ec`. Comprobar el HEAD más reciente antes de deploy.
+- Nueva investigación de 76 candidatos documentada en el [PR #13](https://github.com/metecondrie/student-lead-discovery-agent/pull/13); no implica autorización de scraping ni permiso comercial para RSS de Reddit.
 
 ## Arquitectura general
 `gas/Core.js` (normalización, filtros, deduplicación, clasificación), `gas/Main.js` (Gmail/Sheets, funciones auxiliares), `gas/Catalogo.js` (catálogo de fuentes), `gas/Orquestador.js` (corridas, cuotas, cola y continuación), `gas/PanelOrquestador.html` (interfaz), módulos de YouTube y `tests/`.

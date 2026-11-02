@@ -523,14 +523,14 @@ function orqPreviewPilotoComercial() {
     { id: 'CAT-0002', razon: 'Alertas Tusclases (NO rastrea sitemap ni web)' },
     { id: 'CAT-0086', razon: 'Consultas Superprof (excluir confirmaciones administrativas)' },
     { id: 'CAT-0066', razon: 'Solicitudes abiertas en RSS UTNianos' },
-    { id: 'CAT-0036', razon: 'Grupo control YouTube de audiencia CBC' }
+    { id: 'CAT-0240', razon: 'Solicitudes preseleccionadas desde hoja manual, sin scraping' }
   ];
   var byId = {};
   configured.forEach(function(s) { byId[s.id] = s; });
   var items = requested.map(function(entry) {
     var s = byId[entry.id] || null;
     var ready = !!s && s.enabled === true &&
-      ['gmail_alertas', 'rss_foros', 'youtube_canales'].indexOf(s.connector) >= 0 &&
+      ['gmail_alertas', 'rss_foros', 'youtube_canales', 'solicitudes_verificadas'].indexOf(s.connector) >= 0 &&
       s.verificationState !== 'FALLO';
     return {
       id: entry.id,
@@ -571,7 +571,7 @@ function orqStart(sourceIds, maxComments) {
     // Cargar fuentes del catálogo
     var all = orqSources_(ss);
     var functional = all.filter(function(s) {
-      return ['youtube_canales', 'rss_foros', 'gmail_alertas'].indexOf(s.connector) >= 0;
+      return ['youtube_canales', 'rss_foros', 'gmail_alertas', 'solicitudes_verificadas'].indexOf(s.connector) >= 0;
     });
 
     if (Array.isArray(sourceIds) && sourceIds.length === 0) {
@@ -912,6 +912,8 @@ function orqTick() {
         result = orqExecuteRss_(ss, run, source, job.cursor);
       } else if (job.connector === 'gmail_alertas') {
         result = orqExecuteGmail_(ss, run, source, job.cursor);
+      } else if (job.connector === 'solicitudes_verificadas') {
+        result = orqExecuteSolicitudesVerificadas_(ss, run, source, job.cursor);
       } else {
         result = { estado: 'OMITIDO: conector no implementado', leidos: 0, repetidos: 0, clasificados: 0, solicitudes: 0, candidatos: 0, errores: 0, youtube: 0, gemini: 0, mensaje: '' };
       }
@@ -1542,10 +1544,258 @@ function orqExecuteRss_(ss, run, source, jobCursor) {
 }
 
 /**
- * GmailApp.search() entrega objetos GmailThread. Si un adaptador o una corrida
- * antigua entregara descriptores serializados, intentar rehidratar por ID.
- * No almacenar GmailThread ni GmailMessage en Script Properties.
- * No incluir IDs ni contenido de correos en mensajes de error.
+ * Decodifica únicamente secuencias percent-encoded válidas (%XX), preservando
+ * caracteres "%" no escapados comunes en HTML y CSS (ej. width="100%").
+ * Evita excepciones URIError: URI malformed que detengan el procesamiento de enlaces.
+ */
+function orqSafeDecodeUriComponent_(str) {
+  if (!str) return '';
+  return str.replace(/(%[0-9A-Fa-f]{2})+/g, function(match) {
+    try {
+      return decodeURIComponent(match);
+    } catch(e) {
+      return match;
+    }
+  });
+}
+
+/**
+ * Convierte a UTF-8 los bytes ya decodificados del servicio avanzado o,
+ * para respuestas JSON de la API, decodifica una cadena Base64URL.
+ */
+function orqDecodeBase64WebSafe_(data) {
+  if (!data) return '';
+  if (Array.isArray(data)) {
+    try {
+      if (typeof Utilities !== 'undefined') {
+        return Utilities.newBlob(data).getDataAsString('UTF-8');
+      }
+    } catch(e) {}
+    try {
+      if (typeof Buffer !== 'undefined') return Buffer.from(data).toString('utf8');
+    } catch(e) {}
+    return '';
+  }
+  var clean = String(data).replace(/\s+/g, '');
+  try {
+    if (typeof Utilities !== 'undefined' && typeof Utilities.base64DecodeWebSafe === 'function') {
+      return Utilities.newBlob(Utilities.base64DecodeWebSafe(clean)).getDataAsString('UTF-8');
+    }
+  } catch(e) {}
+  try {
+    if (typeof Utilities !== 'undefined' && typeof Utilities.base64Decode === 'function') {
+      var stdB64 = clean.replace(/-/g, '+').replace(/_/g, '/');
+      while (stdB64.length % 4) stdB64 += '=';
+      return Utilities.newBlob(Utilities.base64Decode(stdB64)).getDataAsString('UTF-8');
+    }
+  } catch(e) {}
+  try {
+    if (typeof Buffer !== 'undefined') {
+      return Buffer.from(clean, 'base64url').toString('utf8');
+    }
+  } catch(e) {}
+  try {
+    var b64 = clean.replace(/-/g, '+').replace(/_/g, '/');
+    while (b64.length % 4) b64 += '=';
+    if (typeof atob === 'function') {
+      return decodeURIComponent(escape(atob(b64)));
+    }
+  } catch(e) {}
+  return '';
+}
+
+function orqGetHeader_(headers, name) {
+  var target = String(name || '').toLowerCase();
+  for (var i = 0; i < (headers || []).length; i++) {
+    var h = headers[i];
+    if (h && h.name && String(h.name).toLowerCase() === target) {
+      return String(h.value || '');
+    }
+  }
+  return '';
+}
+
+function orqExtractMessageBodies_(payload) {
+  var result = { plain: '', html: '' };
+  if (!payload) return result;
+
+  function walk(part) {
+    if (!part) return;
+    var mime = String(part.mimeType || '').toLowerCase();
+    var data = part.body && part.body.data;
+    if (data) {
+      var decoded = orqDecodeBase64WebSafe_(data);
+      if (/^text\/plain\b/i.test(mime)) {
+        result.plain += (result.plain ? '\n' : '') + decoded;
+      } else if (/^text\/html\b/i.test(mime)) {
+        result.html += (result.html ? '\n' : '') + decoded;
+      }
+    }
+    if (Array.isArray(part.parts)) {
+      part.parts.forEach(walk);
+    }
+  }
+
+  walk(payload);
+  return result;
+}
+
+function orqWrapAdvancedMessage_(msg, threadId) {
+  var headers = (msg.payload && msg.payload.headers) || [];
+  var bodies = orqExtractMessageBodies_(msg.payload);
+  var usedSnippet = !bodies.plain && !bodies.html && !!msg.snippet;
+  var plainBody = bodies.plain || msg.snippet || '';
+  var htmlBody = bodies.html || '';
+  var subject = orqGetHeader_(headers, 'Subject');
+  var from = orqGetHeader_(headers, 'From');
+  var mDate = msg.internalDate ? new Date(Number(msg.internalDate)) : new Date();
+
+  return {
+    getId: function() { return String(msg.id || ''); },
+    getThreadId: function() { return String(threadId || msg.threadId || ''); },
+    getFrom: function() { return from; },
+    getSubject: function() { return subject; },
+    getDate: function() { return mDate; },
+    getPlainBody: function() { return plainBody; },
+    getBody: function() { return htmlBody || plainBody; },
+    isSnippetFallback: function() { return usedSnippet; }
+  };
+}
+
+function orqWrapAdvancedThread_(threadResource) {
+  var thId = String(threadResource.id || '');
+  var rawMsgs = Array.isArray(threadResource.messages) ? threadResource.messages : [];
+  var wrappedMsgs = rawMsgs.map(function(m) {
+    return orqWrapAdvancedMessage_(m, thId);
+  });
+
+  return {
+    getId: function() { return thId; },
+    getMessages: function() { return wrappedMsgs; }
+  };
+}
+
+function orqGetGmailThreadById_(id) {
+  if (!id) return null;
+  // 1. Servicio Avanzado Gmail (Gmail API v1 - compatible con gmail.readonly)
+  if (typeof Gmail !== 'undefined' && Gmail.Users && Gmail.Users.Threads) {
+    try {
+      var fullThread = Gmail.Users.Threads.get('me', id, { format: 'full' });
+      return fullThread ? orqWrapAdvancedThread_(fullThread) : null;
+    } catch(e) {
+      // Ante error en el Servicio Avanzado (ej: 403 o no encontrado), NO invocar GmailApp
+      return null;
+    }
+  }
+
+  // 2. En Apps Script (entorno real con Session), prohibido usar GmailApp bajo gmail.readonly
+  if (typeof Session !== 'undefined') {
+    return null;
+  }
+
+  // 3. Fallback a GmailApp (exclusivo para mocks de pruebas unitarias locales Node.js)
+  if (typeof GmailApp !== 'undefined' && typeof GmailApp.getThreadById === 'function') {
+    return GmailApp.getThreadById(id);
+  }
+  return null;
+}
+
+/**
+ * Adaptador unificado para búsqueda y lectura de Gmail.
+ * Prioriza el servicio avanzado Gmail.Users (compatible con https://www.googleapis.com/auth/gmail.readonly).
+ * Maneja paginación con nextPageToken y declara búsquedas incompletas.
+ * PROHÍBE invocar GmailApp en Apps Script bajo alcance gmail.readonly.
+ */
+function orqSearchGmail_(query, maxResults) {
+  var limit = Number(maxResults) || 20;
+  limit = Math.min(Math.max(limit, 1), 100);
+
+  // 1. Servicio Avanzado Gmail (Gmail API v1) - scope: gmail.readonly
+  if (typeof Gmail !== 'undefined' && Gmail.Users && Gmail.Users.Threads) {
+    var results = [];
+    var pageToken = null;
+    var maxPages = 5;
+    var pageCount = 0;
+    var hasMore = false;
+
+    do {
+      pageCount++;
+      var listParams = {
+        q: query,
+        maxResults: Math.min(limit - results.length, 100)
+      };
+      if (pageToken) {
+        listParams.pageToken = pageToken;
+      }
+
+      var resp = Gmail.Users.Threads.list('me', listParams);
+      if (!resp || typeof resp !== 'object') {
+        throw new Error('Gmail.Users.Threads.list no devolvió una lista de conversaciones; revisar versión y adaptadores.');
+      }
+      var threadItems = resp.threads || [];
+      if (!Array.isArray(threadItems)) {
+        throw new Error('Gmail.Users.Threads.list no devolvió una lista de conversaciones; revisar versión y adaptadores.');
+      }
+
+      for (var i = 0; i < threadItems.length; i++) {
+        var item = threadItems[i];
+        if (!item || !item.id) continue;
+        try {
+          var fullThread = Gmail.Users.Threads.get('me', item.id, { format: 'full' });
+          if (fullThread) {
+            results.push(orqWrapAdvancedThread_(fullThread));
+          }
+        } catch(err) {
+          console.warn('Error al leer hilo de Gmail:', err.message);
+        }
+        if (results.length >= limit) {
+          break;
+        }
+      }
+
+      pageToken = resp.nextPageToken || null;
+      if (pageToken && results.length >= limit) {
+        hasMore = true;
+        break;
+      }
+    } while (pageToken && results.length < limit && pageCount < maxPages);
+
+    if (pageToken && !hasMore && pageCount >= maxPages) {
+      hasMore = true;
+    }
+
+    results.nextPageToken = pageToken;
+    results.incompleto = hasMore;
+    if (hasMore) {
+      console.warn('orqSearchGmail_: la búsqueda alcanzó el límite de ' + limit + ' hilos pero existen más páginas disponibles (nextPageToken presente).');
+    }
+
+    return results;
+  }
+
+  // 2. Si estamos en Google Apps Script (entorno real con Session disponible) y el servicio avanzado no está activo:
+  // PROHIBIDO usar GmailApp porque requiere https://mail.google.com/ y el proyecto declara gmail.readonly.
+  if (typeof Session !== 'undefined') {
+    throw new Error('Servicio Avanzado Gmail (Gmail API v1) no habilitado en el proyecto Apps Script. No se permite invocar GmailApp con alcance gmail.readonly por requerir https://mail.google.com/.');
+  }
+
+  // 3. Fallback a GmailApp EXCLUSIVAMENTE para arnés de pruebas unitarias / mocks locales (Node.js)
+  if (typeof GmailApp !== 'undefined' && typeof GmailApp.search === 'function') {
+    var rawList = GmailApp.search(query, 0, limit);
+    if (!Array.isArray(rawList)) {
+      throw new Error('GmailApp.search no devolvió una lista de conversaciones; revisar versión y adaptadores.');
+    }
+    rawList.nextPageToken = null;
+    rawList.incompleto = false;
+    return rawList;
+  }
+
+  throw new Error('Servicio de Gmail no disponible en este entorno.');
+}
+
+/**
+ * Rehidrata un hilo de Gmail desde objeto o identificador string.
+ * Compatible tanto con el servicio avanzado como con GmailApp.
  */
 function orqHydrateGmailThread_(rawThread) {
   if (rawThread && typeof rawThread.getMessages === 'function' &&
@@ -1557,13 +1807,12 @@ function orqHydrateGmailThread_(rawThread) {
   else if (rawThread && typeof rawThread === 'object') {
     id = String(rawThread.threadId || rawThread.id || '');
   }
-  if (id && typeof GmailApp !== 'undefined' &&
-      typeof GmailApp.getThreadById === 'function') {
-    var rehydrated = GmailApp.getThreadById(id);
+  if (id) {
+    var rehydrated = orqGetGmailThreadById_(id);
     if (rehydrated && typeof rehydrated.getMessages === 'function' &&
         typeof rehydrated.getId === 'function') return rehydrated;
   }
-  throw new Error('GmailApp.search no entregó un GmailThread válido; revisar versión desplegada, adaptadores y serialización del estado (sin datos del correo).');
+  throw new Error('Servicio de Gmail no entregó un GmailThread válido; revisar versión desplegada, adaptadores y serialización del estado (sin datos del correo).');
 }
 
 /**
@@ -1574,12 +1823,12 @@ function orqHydrateGmailThread_(rawThread) {
  */
 function orqGmailStableId_(item, msgId) {
   var it = item || {};
-  if (it.id) return String(it.id);
   var raw = String(it.url || '');
-  var canonical = typeof canonicalUrl === 'function' ? canonicalUrl(raw) : raw;
-  var tusMatch = canonical.match(/tusclases\.com(?:\.[a-z]{2,})?\/[^?#]*?(\d{5,})\.aspx(?:[?#]|$)/i) ||
-    canonical.match(/tusclases\.com(?:\.[a-z]{2,})?\/[^#]*?[?&]id=(\d{5,})(?:[&#]|$)/i);
-  if (tusMatch) return 'GMAIL-TUSCLASES-' + tusMatch[1];
+  // Usar solo identificadores presentes en la URL PÚBLICA del anuncio.
+  // Un enlace /inbox o /perfil puede corresponder a alumnos diferentes.
+  var manualId = typeof orqManualAdId_ === 'function' ? orqManualAdId_(raw) : '';
+  if (manualId) return 'GMAIL-TUSCLASES-' + manualId;
+  if (it.id) return String(it.id);
 
   // Otras plataformas pueden enviar el mismo enlace a un perfil o bandeja
   // para alumnos DIFERENTES. Solo un ID de anuncio comprobable permite fusionar
@@ -1599,98 +1848,402 @@ function orqTusclasesIds_(input) {
   var s = String(input || '').replace(/&amp;/gi, '&');
   var result = {};
   for (var i = 0; i < 4; i++) {
-    var regex = /tusclases\.com(?:\.ar)?\/[^\s"'<>]{0,500}?(\d{5,})\.aspx(?:[?#/&]|$)/gi;
+    var regex = /(?:tusclases\.(?:com\.ar|com|co|pe|mx)|tusclasesparticulares\.(?:cl|com))\/[^\s"'<>]{0,500}?(\d{5,})(?:\.aspx)?(?=[?#/&\s"'<>,.;:)]|$)/gi;
     var hit;
     while ((hit = regex.exec(s)) !== null) result[hit[1]] = true;
-    var query = /tusclases\.com(?:\.ar)?\/[^\s"'<>]{0,500}?[?&]id=(\d{5,})(?:[&#\s]|$)/gi;
+    var query = /(?:tusclases\.(?:com\.ar|com|co|pe|mx)|tusclasesparticulares\.(?:cl|com))\/[^\s"'<>]{0,500}?[?&]id=(\d{5,})(?=[&#\s"'<>,.;:)]|$)/gi;
     while ((hit = query.exec(s)) !== null) result[hit[1]] = true;
-    try {
-      var decoded = decodeURIComponent(s);
-      if (decoded === s) break;
-      s = decoded;
-    } catch(e) { break; }
+    var decoded = orqSafeDecodeUriComponent_(s);
+    if (decoded === s) break;
+    s = decoded;
+  }
+  var trimmed = s.trim();
+  if (/^\d{5,8}$/.test(trimmed)) {
+    result[trimmed] = true;
+  }
+  var mBare = trimmed.match(/\b(?:aviso|solicitud|id|anuncio)[:\s#]*(\d{5,8})\b/i);
+  if (mBare) {
+    result[mBare[1]] = true;
   }
   return Object.keys(result);
 }
 
 /**
- * Historial privado de contactos conocidos; solo índices temporales en RAM.
- * Nunca exportar correo, nombres, mensajes ni contactos a GitHub o Script Properties.
- * La falta de coincidencia NO demuestra ausencia de conversación interna.
+ * Identifica el dominio normalizado de Tusclases para evitar colisiones
+ * numéricas entre portales (Chile, Colombia, Argentina, etc.).
  */
-function orqContactHistory_(ss) {
+function orqTusclasesDomain_(input) {
+  var s = String(input || '');
+  for (var i = 0; i < 4; i++) {
+    var m = s.match(/(?:https?:\/\/)?(?:www\.)?((?:tusclases\.(?:com\.ar|com|co|pe|mx)|tusclasesparticulares\.(?:cl|com)))/i);
+    if (m) {
+      var dom = m[1].toLowerCase();
+      if (/\.cl\b/i.test(dom) || dom.indexOf('tusclasesparticulares') >= 0) return 'tusclasesparticulares.cl';
+      if (/\.co\b/i.test(dom)) return 'tusclases.co';
+      if (/\.com\.ar\b/i.test(dom)) return 'tusclases.com.ar';
+      if (/\.pe\b/i.test(dom)) return 'tusclases.pe';
+      if (/\.mx\b/i.test(dom)) return 'tusclases.mx';
+      return dom;
+    }
+    var decoded = orqSafeDecodeUriComponent_(s);
+    if (decoded === s) break;
+    s = decoded;
+  }
+  return '';
+}
+
+function orqDomainToCountry_(domain) {
+  var d = String(domain || '').toLowerCase();
+  if (/\.cl\b/i.test(d) || d === 'cl') return 'CL';
+  if (/\.co\b/i.test(d) || d === 'co') return 'CO';
+  if (/\.com\.ar\b/i.test(d) || d === 'ar') return 'AR';
+  if (/\.pe\b/i.test(d) || d === 'pe') return 'PE';
+  if (/\.mx\b/i.test(d) || d === 'mx') return 'MX';
+  if (/\.com\b/i.test(d) || d === 'com' || d === 'es') return 'ES';
+  return 'GENERIC';
+}
+
+/**
+ * Extrae claves compuestas de anuncios Tusclases: [dominio:id], distinguiendo
+ * país y portal (ej. tusclasesparticulares.cl:2466158, tusclases.co:2466833, tusclases.com.ar:2466634).
+ * Evita colisiones numéricas entre distintos países.
+ */
+function orqTusclasesAdKeys_(input) {
+  var s = String(input || '').replace(/&amp;/gi, '&');
+  var result = {};
+  for (var i = 0; i < 4; i++) {
+    var regex = /((?:tusclases\.(?:com\.ar|com|co|pe|mx)|tusclasesparticulares\.(?:cl|com)))\/[^\s"'<>]{0,500}?(\d{5,})(?:\.aspx)?(?=[?#/&\s"'<>,.;:)]|$)/gi;
+    var hit;
+    while ((hit = regex.exec(s)) !== null) {
+      var dom = String(hit[1]).toLowerCase();
+      var id = String(hit[2]);
+      result[dom + ':' + id] = true;
+    }
+    var query = /((?:tusclases\.(?:com\.ar|com|co|pe|mx)|tusclasesparticulares\.(?:cl|com)))\/[^\s"'<>]{0,500}?[?&]id=(\d{5,})(?=[&#\s"'<>,.;:)]|$)/gi;
+    while ((hit = query.exec(s)) !== null) {
+      var dom = String(hit[1]).toLowerCase();
+      var id = String(hit[2]);
+      result[dom + ':' + id] = true;
+    }
+    var decoded = orqSafeDecodeUriComponent_(s);
+    if (decoded === s) break;
+    s = decoded;
+  }
+  return Object.keys(result);
+}
+
+/**
+ * Extrae la clave del anuncio contactado de un correo de comprobante de Tusclases.
+ * Prioriza el bloque contextual donde se confirma el envío ("Tu mensaje al anunciante de..."),
+ * eliminando secciones de recomendaciones secundarias, pie de página o enlaces a otros anuncios.
+ * Si el mensaje contiene múltiples anuncios en conflicto que no pueden resolverse de forma inequívoca,
+ * devuelve estado AMBIGUO_REVISION_MANUAL con clave null, evitando registrar contactos espurios.
+ */
+function orqExtractReceiptTargetAdKey_(body, subject) {
+  var text = String(body || '');
+  var sub = String(subject || '');
+  if (!text && !sub) return { key: null, status: 'SIN_TEXTO', allKeys: [] };
+
+  // Marcador de límites de recomendaciones, avisos relacionados o footer
+  var recBoundaryRegex = /(?:otros alumnos|alumnos similares|otros anuncios|otras solicitudes|quiz[aá]s te interese|anuncios relacionados|tambi[eé]n te puede interesar|solicitudes similares|recomendaciones|<footer\b|class=["'][^"']*footer[^"']*["']|id=["'][^"']*footer[^"']*["'])/i;
+
+  // 1. Localizar ancla de confirmación principal en el cuerpo
+  var anchorRegex = /(?:tu mensaje (?:al anunciante(?: de)?|se ha enviado|ha sido enviado)|se ha enviado correctamente|mensaje(?:[\s\S]{0,40})enviado(?:[\s\S]{0,40})correctamente|consulta enviada al anunciante)/i;
+  var anchorMatch = text.match(anchorRegex);
+  var anchorIdx = anchorMatch ? anchorMatch.index : -1;
+
+  var candidateKeys = [];
+
+  if (anchorIdx >= 0) {
+    // Ventana contextual alrededor del ancla
+    var windowStart = Math.max(0, anchorIdx - 400);
+    var windowEnd = Math.min(text.length, anchorIdx + 3000);
+    var windowText = text.slice(windowStart, windowEnd);
+    var anchorOffsetInWindow = anchorIdx - windowStart;
+
+    // Si después del ancla aparece un corte de recomendaciones o footer, recortar la ventana
+    var cutMatch = windowText.slice(anchorOffsetInWindow).match(recBoundaryRegex);
+    if (cutMatch) {
+      windowText = windowText.slice(0, anchorOffsetInWindow + cutMatch.index);
+    }
+
+    candidateKeys = orqTusclasesAdKeys_(windowText);
+  }
+
+  // Si en la ventana contextual encontramos exactamente 1 clave única:
+  if (candidateKeys.length === 1) {
+    return { key: candidateKeys[0], status: 'UNICO_CONTEXTUAL', allKeys: candidateKeys };
+  }
+
+  // Si en la ventana contextual hay múltiples claves:
+  if (candidateKeys.length > 1) {
+    var subKeys = orqTusclasesAdKeys_(sub);
+    if (subKeys.length === 1 && candidateKeys.indexOf(subKeys[0]) >= 0) {
+      return { key: subKeys[0], status: 'RESUELTO_POR_ASUNTO', allKeys: candidateKeys };
+    }
+    var subBare = orqTusclasesIds_(sub);
+    var subDigitMatch = sub.match(/\b(\d{5,8})\b/);
+    var subAdId = subBare.length === 1 ? subBare[0] : (subDigitMatch ? subDigitMatch[1] : null);
+    if (subAdId) {
+      var matching = candidateKeys.filter(function(k) { return k.split(':')[1] === subAdId; });
+      if (matching.length === 1) {
+        return { key: matching[0], status: 'RESUELTO_POR_ASUNTO_ID', allKeys: candidateKeys };
+      }
+    }
+    return { key: null, status: 'AMBIGUO_REVISION_MANUAL', allKeys: candidateKeys };
+  }
+
+  // 2. Si no se encontró en la ventana contextual, buscar en el cuerpo limpio (antes de recomendaciones)
+  var cleanText = text;
+  var recMatch = cleanText.match(recBoundaryRegex);
+  if (recMatch) {
+    cleanText = cleanText.slice(0, recMatch.index);
+  }
+  var fallbackKeys = orqTusclasesAdKeys_(cleanText);
+  if (fallbackKeys.length === 1) {
+    return { key: fallbackKeys[0], status: 'UNICO_GLOBAL_LIMPIO', allKeys: fallbackKeys };
+  }
+  if (fallbackKeys.length > 1) {
+    var subKeys2 = orqTusclasesAdKeys_(sub);
+    if (subKeys2.length === 1 && fallbackKeys.indexOf(subKeys2[0]) >= 0) {
+      return { key: subKeys2[0], status: 'RESUELTO_POR_ASUNTO', allKeys: fallbackKeys };
+    }
+    var subBare2 = orqTusclasesIds_(sub);
+    var subDigitMatch2 = sub.match(/\b(\d{5,8})\b/);
+    var subAdId2 = subBare2.length === 1 ? subBare2[0] : (subDigitMatch2 ? subDigitMatch2[1] : null);
+    if (subAdId2) {
+      var matching2 = fallbackKeys.filter(function(k) { return k.split(':')[1] === subAdId2; });
+      if (matching2.length === 1) {
+        return { key: matching2[0], status: 'RESUELTO_POR_ASUNTO_ID', allKeys: fallbackKeys };
+      }
+    }
+    return { key: null, status: 'AMBIGUO_REVISION_MANUAL', allKeys: fallbackKeys };
+  }
+
+  // 3. Último recurso: cuerpo sin filtrar
+  var allBodyKeys = orqTusclasesAdKeys_(text);
+  if (allBodyKeys.length === 1) {
+    return { key: allBodyKeys[0], status: 'UNICO_GLOBAL', allKeys: allBodyKeys };
+  }
+  if (allBodyKeys.length > 1) {
+    var subKeys3 = orqTusclasesAdKeys_(sub);
+    if (subKeys3.length === 1 && allBodyKeys.indexOf(subKeys3[0]) >= 0) {
+      return { key: subKeys3[0], status: 'RESUELTO_POR_ASUNTO', allKeys: allBodyKeys };
+    }
+    var subBare3 = orqTusclasesIds_(sub);
+    var subDigitMatch3 = sub.match(/\b(\d{5,8})\b/);
+    var subAdId3 = subBare3.length === 1 ? subBare3[0] : (subDigitMatch3 ? subDigitMatch3[1] : null);
+    if (subAdId3) {
+      var matching3 = allBodyKeys.filter(function(k) { return k.split(':')[1] === subAdId3; });
+      if (matching3.length === 1) {
+        return { key: matching3[0], status: 'RESUELTO_POR_ASUNTO_ID', allKeys: allBodyKeys };
+      }
+    }
+    return { key: null, status: 'AMBIGUO_REVISION_MANUAL', allKeys: allBodyKeys };
+  }
+
+  return { key: null, status: 'SIN_IDENTIFICADOR', allKeys: [] };
+}
+
+/**
+ * Historial privado de contactos conocidos; solo índices temporales en RAM.
+ * Conserva compatibilidad con IDs numéricos anteriores pero indexa claves canónicas
+ * compuestas para evitar colisiones entre Chile, Colombia y Argentina.
+ */
+function orqContactHistory_(ss, opts) {
+  opts = opts || {};
   var output = {
-    known: {}, possibleSent: {}, crmChecked: false,
-    receiptsChecked: false, sentChecked: false, incomplete: false,
-    crmRows: 0, crmWithId: 0, receiptMatches: 0, receiptMessages: 0,
-    receiptUnparsed: 0, crmUnique: 0, receiptUnique: 0, receiptNotInCrm: 0
+    known: {},
+    knownCanonical: {},
+    knownOrigins: {},
+    legacyBareIds: {},
+    possibleSent: {},
+    possibleSentCanonical: {},
+    crmChecked: false,
+    receiptsChecked: false,
+    sentChecked: false,
+    incomplete: false,
+    crmRows: 0,
+    crmWithId: 0,
+    receiptMatches: 0,
+    receiptMessages: 0,
+    receiptUnparsed: 0,
+    receiptAmbiguous: 0,
+    crmUnique: 0,
+    receiptUnique: 0,
+    receiptNotInCrm: 0,
+    etapas: {
+      busqueda: {
+        hilosRecuperados: 0,
+        busquedaIncompleta: false
+      },
+      lectura: {
+        mensajesTotal: 0,
+        mensajesAsuntoCoincidente: 0,
+        mensajesConfirmacionTexto: 0
+      },
+      decodificacion: {
+        conTextoPlano: 0,
+        conHtml: 0,
+        conSnippetFallback: 0
+      },
+      extraccion: {
+        conEnlacesTracking: 0,
+        conClavesExtraidas: 0,
+        anunciosUnicos: 0,
+        anunciosPorPais: {},
+        mensajesSinIdentificador: 0,
+        mensajesAmbiguos: 0
+      }
+    }
   };
-  var crmIds = {}, receiptIds = {};
+  var crmKeys = {}, receiptKeys = {};
   var sh = ss.getSheetByName('Contactados');
   if (sh) {
     output.crmChecked = true;
     orqRows_(sh).forEach(function(row) {
       if (!row || (!row[0] && !row[2])) return;
       output.crmRows++;
-      var rowIds = orqTusclasesIds_(row[2]);
-      if (rowIds.length) output.crmWithId++;
-      rowIds.forEach(function(id) {
-        output.known[id] = true;
-        crmIds[id] = true;
-      });
+      var urlStr = String(row[2] || '');
+      var noteStr = String(row[4] || '');
+      var combo = urlStr + ' ' + noteStr;
+      var rowKeys = orqTusclasesAdKeys_(combo);
+      var rowBareIds = orqTusclasesIds_(combo);
+
+      if (rowKeys.length) {
+        output.crmWithId++;
+        rowKeys.forEach(function(k) {
+          output.knownCanonical[k] = true;
+          crmKeys[k] = true;
+          var dom = k.split(':')[0];
+          var num = k.split(':')[1];
+          output.known[num] = true;
+          var country = orqDomainToCountry_(dom);
+          if (country) output.knownCanonical[country.toLowerCase() + ':' + num] = true;
+        });
+      } else if (rowBareIds.length) {
+        output.crmWithId++;
+        rowBareIds.forEach(function(id) {
+          output.known[id] = true;
+          output.legacyBareIds[id] = true;
+          crmKeys['legacy:' + id] = true;
+        });
+      }
     });
   } else {
     output.incomplete = true;
   }
 
-  if (typeof GmailApp === 'undefined' || typeof GmailApp.search !== 'function') {
-    output.incomplete = true;
-    output.crmUnique = Object.keys(crmIds).length;
+  if (opts.skipGmail ||
+      ((typeof Gmail === 'undefined' || !Gmail.Users || !Gmail.Users.Threads) &&
+       (typeof GmailApp === 'undefined' || typeof GmailApp.search !== 'function'))) {
+    output.incomplete = opts.skipGmail ? false : true;
+    output.crmUnique = Object.keys(crmKeys).length;
     return output;
   }
 
-  // Los comprobantes de Tusclases llegan a RECIBIDOS, NO a Enviados.
-  // Buscamos solo el asunto específico para evitar marcar boletines como contacto.
+  // Comprobantes de Tusclases recibidos (Argentina, Chile, Colombia, España).
+  // Agrupación booleana explícita para evitar precedencia implícita de AND sobre OR en Gmail.
   try {
-    var receiptThreads = GmailApp.search('newer_than:365d subject:"Mensaje desde tusclases.com.ar:"', 0, 100);
+    var receiptQuery = 'newer_than:365d subject:"Mensaje desde tusclases" OR (newer_than:365d subject:"Mensaje desde tusclasesparticulares") OR (newer_than:365d subject:"Mensaje desde tusclases.co") OR (newer_than:365d subject:"Mensaje desde tusclases.com.ar") OR (newer_than:365d subject:"tusclases")';
+    var receiptThreads = orqSearchGmail_(receiptQuery, 100);
     if (!Array.isArray(receiptThreads)) throw new Error('Búsqueda Gmail inválida');
-    if (receiptThreads.length === 100) output.incomplete = true;
+    output.etapas.busqueda.hilosRecuperados = receiptThreads.length;
+    if (receiptThreads.length === 100 || receiptThreads.incompleto) {
+      output.incomplete = true;
+      output.etapas.busqueda.busquedaIncompleta = true;
+    }
     receiptThreads.forEach(function(raw) {
       var thread = orqHydrateGmailThread_(raw);
       thread.getMessages().forEach(function(m) {
+        output.etapas.lectura.mensajesTotal++;
         var sub = String(m.getSubject() || '');
-        if (!/Mensaje desde tusclases\.com\.ar:/i.test(sub)) return;
-        var body = String(m.getPlainBody() || '');
-        if (!/se ha enviado correctamente/i.test(body)) return;
-        output.receiptMessages++;
-        var ids = orqTusclasesIds_(body);
-        if (!ids.length) {
-          output.receiptUnparsed++;
-          output.incomplete = true;
+        if (!/Mensaje desde (?:tusclases|tusclasesparticulares)/i.test(sub)) return;
+        output.etapas.lectura.mensajesAsuntoCoincidente++;
+
+        var plain = typeof m.getPlainBody === 'function' ? String(m.getPlainBody() || '') : '';
+        var html = typeof m.getBody === 'function' ? String(m.getBody() || '') : '';
+        if (plain) output.etapas.decodificacion.conTextoPlano++;
+        if (html && html !== plain) output.etapas.decodificacion.conHtml++;
+        if (typeof m.isSnippetFallback === 'function' && m.isSnippetFallback()) {
+          output.etapas.decodificacion.conSnippetFallback++;
         }
-        ids.forEach(function(id) {
-          output.known[id] = true;
-          receiptIds[id] = true;
+
+        var fullBody = plain + '\n' + html;
+        if (!/se ha enviado correctamente|mensaje.*enviado.*correctamente/i.test(fullBody) &&
+            !/se ha enviado correctamente|mensaje.*enviado.*correctamente/i.test(sub)) {
+          return;
+        }
+        output.etapas.lectura.mensajesConfirmacionTexto++;
+        output.receiptMessages++;
+
+        if (/awstrack\.me|email\.tusclasesparticulares|r\.email\.tusclases|aws/i.test(fullBody)) {
+          output.etapas.extraccion.conEnlacesTracking++;
+        }
+
+        var targetResult = orqExtractReceiptTargetAdKey_(fullBody, sub);
+        if (targetResult.status === 'AMBIGUO_REVISION_MANUAL') {
+          output.receiptAmbiguous++;
+          output.etapas.extraccion.mensajesAmbiguos++;
+          output.incomplete = true;
+        } else if (!targetResult.key) {
+          var bareIds = orqTusclasesIds_(fullBody);
+          if (!bareIds.length) {
+            output.receiptUnparsed++;
+            output.etapas.extraccion.mensajesSinIdentificador++;
+            output.incomplete = true;
+          } else if (bareIds.length > 1) {
+            output.receiptAmbiguous++;
+            output.etapas.extraccion.mensajesAmbiguos++;
+            output.incomplete = true;
+          } else {
+            output.etapas.extraccion.conClavesExtraidas++;
+            output.known[bareIds[0]] = true;
+          }
+        } else {
+          output.etapas.extraccion.conClavesExtraidas++;
+          var k = targetResult.key;
+          output.knownCanonical[k] = true;
+          receiptKeys[k] = true;
           output.receiptMatches++;
-        });
+          var dom = k.split(':')[0];
+          var num = k.split(':')[1];
+          output.known[num] = true;
+          var country = orqDomainToCountry_(dom);
+          if (country) {
+            output.knownCanonical[country.toLowerCase() + ':' + num] = true;
+            output.etapas.extraccion.anunciosPorPais[country] =
+              (output.etapas.extraccion.anunciosPorPais[country] || 0) + 1;
+          }
+        }
       });
     });
     output.receiptsChecked = true;
   } catch(e) {
-    output.incomplete = true; // jamás fingir una verificación que falló
+    output.incomplete = true;
   }
 
-  // Gmail ENVIADOS puede contener contactos directos que no fueron vía plataforma.
-  // Una URL en un mensaje enviado no prueba a quién se contactó; es evidencia
-  // posible y debe confirmarse manualmente, no bloqueo definitivo.
+  // Búsqueda en Enviados ampliada
   try {
-    var sent = GmailApp.search('in:sent newer_than:365d (tusclases.com.ar OR superprof.com.ar)', 0, 100);
+    var sentQuery = 'in:sent newer_than:365d (tusclases.com.ar OR tusclases.co OR tusclasesparticulares.cl OR superprof.com.ar)';
+    var sent = orqSearchGmail_(sentQuery, 100);
     if (!Array.isArray(sent)) throw new Error('Búsqueda Gmail inválida');
-    if (sent.length === 100) output.incomplete = true;
+    if (sent.length === 100 || sent.incompleto) output.incomplete = true;
     sent.forEach(function(raw) {
       var thread = orqHydrateGmailThread_(raw);
       thread.getMessages().forEach(function(m) {
-        orqTusclasesIds_(String(m.getPlainBody() || '')).forEach(function(id) {
+        var plain = typeof m.getPlainBody === 'function' ? String(m.getPlainBody() || '') : '';
+        var html = typeof m.getBody === 'function' ? String(m.getBody() || '') : '';
+        var fullSent = plain + '\n' + html;
+        orqTusclasesAdKeys_(fullSent).forEach(function(k) {
+          output.possibleSentCanonical[k] = true;
+          var dom = k.split(':')[0];
+          var num = k.split(':')[1];
+          output.possibleSent[num] = true;
+          var country = orqDomainToCountry_(dom);
+          if (country) output.possibleSentCanonical[country.toLowerCase() + ':' + num] = true;
+        });
+        orqTusclasesIds_(fullSent).forEach(function(id) {
           output.possibleSent[id] = true;
         });
       });
@@ -1699,10 +2252,12 @@ function orqContactHistory_(ss) {
   } catch(e) {
     output.incomplete = true;
   }
-  output.crmUnique = Object.keys(crmIds).length;
-  output.receiptUnique = Object.keys(receiptIds).length;
-  output.receiptNotInCrm = Object.keys(receiptIds).filter(function(id) {
-    return !crmIds[id];
+
+  output.crmUnique = Object.keys(crmKeys).length;
+  output.receiptUnique = Object.keys(receiptKeys).length;
+  output.etapas.extraccion.anunciosUnicos = output.receiptUnique;
+  output.receiptNotInCrm = Object.keys(receiptKeys).filter(function(k) {
+    return !crmKeys[k];
   }).length;
   return output;
 }
@@ -1711,7 +2266,7 @@ function orqContactHistory_(ss) {
 function orqDiagnosticoContactosSoloLectura() {
   var ss = orqDb_();
   var h = orqContactHistory_(ss);
-  return {
+  var report = {
     modo: 'SOLO_LECTURA',
     contactosCRM: h.crmRows,
     contactosCRMConIdentificador: h.crmWithId,
@@ -1719,6 +2274,7 @@ function orqDiagnosticoContactosSoloLectura() {
     confirmacionesGmail: h.receiptMessages,
     anunciosUnicosConfirmaciones: h.receiptUnique,
     confirmacionesSinIdentificador: h.receiptUnparsed,
+    confirmacionesAmbiguas: h.receiptAmbiguous || 0,
     anunciosConfirmadosNoRegistradosEnCRM: h.receiptNotInCrm,
     fuentesConsultadas: {
       contactados: h.crmChecked,
@@ -1727,22 +2283,413 @@ function orqDiagnosticoContactosSoloLectura() {
     },
     revisionIncompleta: h.incomplete,
     mensajeriaInternaVerificada: false,
+    etapas: h.etapas || {},
     advertencia: 'Revisá las conversaciones internas antes de escribir. Este informe no envía mensajes ni edita datos.'
   };
+  console.log('[DIAGNOSTICO CONTACTOS (SOLO LECTURA)]:', JSON.stringify(report, null, 2));
+  return report;
+}
+
+/**
+ * Función auxiliar sin parámetros para ejecutar e imprimir el diagnóstico de contactos
+ * en modo SOLO LECTURA estricto desde el editor de Google Apps Script.
+ * No realiza ninguna escritura en Google Sheets ni altera ninguna hoja.
+ */
+function orqEjecutarDiagnosticoContactos() {
+  return orqDiagnosticoContactosSoloLectura();
 }
 
 function orqContactDecision_(item, history) {
-  var ids = orqTusclasesIds_(String(item && item.url || ''));
-  if (ids.some(function(id){ return !!history.known[id]; })) {
+  var itemUrl = String(item && (item.url || item) || '');
+  var canonicalKeys = orqTusclasesAdKeys_(itemUrl);
+  var bareIds = orqTusclasesIds_(itemUrl);
+
+  // 1. Coincidencia exacta por clave canónica (dominio:id)
+  if (canonicalKeys.some(function(k) {
+    return !!history.knownCanonical[k];
+  })) {
     return 'CONTACTADO_CONFIRMADO';
   }
-  if (ids.some(function(id){ return !!history.possibleSent[id]; })) {
+
+  // 2. Coincidencia con registro legacy de ID desnudo (conservador):
+  if (bareIds.some(function(id) { return !!history.legacyBareIds[id]; })) {
+    var dom = orqTusclasesDomain_(itemUrl);
+    if (/\.cl\b/i.test(dom) || /\.co\b/i.test(dom)) {
+      return 'CONTACTO_PENDIENTE_DE_VERIFICACION';
+    }
+    return 'CONTACTADO_CONFIRMADO';
+  }
+
+  // 3. Verificación de enviados posibles
+  if (canonicalKeys.some(function(k) { return !!history.possibleSentCanonical[k]; }) ||
+      bareIds.some(function(id) { return !!history.possibleSent[id]; })) {
     return 'VERIFICAR_ENVIADOS_Y_PLATAFORMA';
   }
-  // El buzón y la hoja pueden estar incompletos; además no se dispone de
-  // mensajería interna de las plataformas.
+
+  // 4. Si el buzón o la hoja estuvieron incompletos:
   return history.incomplete ? 'VERIFICACION_INCOMPLETA' : 'VERIFICAR_MENSAJERIA_INTERNA';
 }
+
+function orqIsContacted_(item, history) {
+  return orqContactDecision_(item, history) === 'CONTACTADO_CONFIRMADO';
+}
+
+/**
+ * Registra manualmente un anuncio como contactado con protección de LockService,
+ * verificación de idempotencia y sin sobrescribir la columna 12 de OrqHallazgos.
+ */
+function orqRecordManualContact(data) {
+  if (!data || (!data.canonicalKey && !data.url && !data.id)) {
+    throw new Error('Identificador de anuncio o URL obligatorios.');
+  }
+  var lock = LockService.getScriptLock();
+  if (!lock.tryLock(10000)) {
+    return { ok: false, error: 'BLOQUEADO: otra operación está escribiendo en la planilla. Intentá de nuevo.' };
+  }
+  try {
+    var ss = orqDb_();
+    var sh = orqSheet_(ss, 'Contactados');
+    var rawUrl = String(data.url || '');
+    var canonicalKeys = orqTusclasesAdKeys_(rawUrl || data.canonicalKey);
+    var targetKey = canonicalKeys.length ? canonicalKeys[0] : String(data.canonicalKey || data.id || '');
+    var targetUrl = rawUrl;
+
+    if (!targetUrl && targetKey.indexOf(':') > 0) {
+      var parts = targetKey.split(':');
+      targetUrl = 'https://www.' + parts[0] + '/alumnos/' + parts[1] + '.aspx';
+    }
+
+    // 1. Verificar si ya existe en Contactados (idempotencia)
+    var rows = orqRows_(sh);
+    for (var i = 0; i < rows.length; i++) {
+      var rUrl = String(rows[i][2] || '');
+      var rNote = String(rows[i][4] || '');
+      var rKeys = orqTusclasesAdKeys_(rUrl + ' ' + rNote);
+      if (rKeys.indexOf(targetKey) >= 0 || (targetUrl && rUrl === targetUrl)) {
+        return { ok: true, yaRegistrado: true, canonicalKey: targetKey, mensaje: 'Ya estaba registrado en Contactados.' };
+      }
+    }
+
+    // 2. Registrar en Contactados (Columna 12 de OrqHallazgos NO se sobrescribe)
+    var today = Utilities.formatDate(new Date(), 'America/Argentina/Buenos_Aires', 'yyyy-MM-dd');
+    var nombre = String(data.nombre || 'Alumno ' + (data.fuente || 'Tusclases')).slice(0, 100);
+    var materia = String(data.materia || 'Particular').slice(0, 100);
+    var nota = 'Contacto manual registrado desde Panel [' + targetKey + ']';
+    sh.appendRow([nombre, materia, targetUrl || targetKey, today, nota]);
+
+    // 3. Si existe en Piloto_Demanda_20261101, actualizar estado a EXCLUIDO_CONTACTADO
+    var shPiloto = ss.getSheetByName('Piloto_Demanda_20261101');
+    if (shPiloto && shPiloto.getLastRow() >= 2) {
+      var pRows = shPiloto.getRange(2, 1, shPiloto.getLastRow() - 1, 11).getValues();
+      for (var p = 0; p < pRows.length; p++) {
+        var pUrl = String(pRows[p][3] || '');
+        var pKeys = orqTusclasesAdKeys_(pUrl);
+        if (pKeys.indexOf(targetKey) >= 0 || (targetUrl && pUrl === targetUrl)) {
+          shPiloto.getRange(p + 2, 8).setValue('EXCLUIDO_CONTACTADO');
+          shPiloto.getRange(p + 2, 9).setValue('Confirmado vía panel (' + today + ')');
+        }
+      }
+    }
+
+    return {
+      ok: true,
+      yaRegistrado: false,
+      canonicalKey: targetKey,
+      fecha: today,
+      mensaje: 'Contacto registrado exitosamente en Contactados.'
+    };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+/**
+ * Procedimiento de corrección para revertir un contacto marcado por error.
+ */
+function orqRevertManualContact(canonicalKeyOrUrl) {
+  if (!canonicalKeyOrUrl) throw new Error('Identificador obligatorio para revertir.');
+  var lock = LockService.getScriptLock();
+  if (!lock.tryLock(10000)) {
+    return { ok: false, error: 'BLOQUEADO: otra operación en curso.' };
+  }
+  try {
+    var ss = orqDb_();
+    var sh = ss.getSheetByName('Contactados');
+    if (!sh || sh.getLastRow() < 2) return { ok: false, error: 'Hoja Contactados no encontrada o vacía.' };
+    var rows = sh.getRange(2, 1, sh.getLastRow() - 1, sh.getLastColumn()).getValues();
+    var canonicalKeys = orqTusclasesAdKeys_(canonicalKeyOrUrl);
+    var targetKey = canonicalKeys.length ? canonicalKeys[0] : String(canonicalKeyOrUrl);
+    var foundRow = -1;
+
+    for (var i = rows.length - 1; i >= 0; i--) {
+      var rUrl = String(rows[i][2] || '');
+      var rNote = String(rows[i][4] || '');
+      var rKeys = orqTusclasesAdKeys_(rUrl + ' ' + rNote);
+      if (rKeys.indexOf(targetKey) >= 0 || rUrl === canonicalKeyOrUrl || rNote.indexOf(targetKey) >= 0) {
+        foundRow = i + 2;
+        break;
+      }
+    }
+
+    if (foundRow > 0) {
+      sh.deleteRow(foundRow);
+      return { ok: true, revertido: true, canonicalKey: targetKey, mensaje: 'Registro de contacto revertido en Contactados.' };
+    }
+    return { ok: false, error: 'No se encontró el registro para revertir.' };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+/**
+ * Sincronización automática periódica e independiente de búsquedas de alumnos.
+ * Idempotente, protegida con LockService y cuotas de búsqueda.
+ */
+function orqSyncContactReceipts(maxDays, dryRun) {
+  var lock = LockService.getScriptLock();
+  if (!lock.tryLock(10000)) {
+    return { ok: false, error: 'BLOQUEADO: otra sincronización en curso.' };
+  }
+  var res = {
+    ok: true,
+    modo: dryRun ? 'SOLO_LECTURA' : 'ESCRITURA',
+    mensajesRevisados: 0,
+    comprobantesIdentificados: 0,
+    nuevosContactosIncorporados: 0,
+    yaRegistrados: 0,
+    sinIdentificador: 0,
+    ambiguos: 0,
+    busquedaIncompleta: false,
+    nextPageToken: null,
+    errores: []
+  };
+
+  try {
+    if (typeof Gmail === 'undefined' || !Gmail.Users || !Gmail.Users.Threads) {
+      if (typeof Session !== 'undefined') {
+        res.ok = false;
+        res.error = 'Servicio Avanzado Gmail (Gmail API v1) no habilitado en Apps Script. Prohibido fallback a GmailApp bajo alcance gmail.readonly.';
+        return res;
+      }
+      if (typeof GmailApp === 'undefined' || typeof GmailApp.search !== 'function') {
+        res.ok = false;
+        res.error = 'Servicio de Gmail no disponible en este entorno.';
+        return res;
+      }
+    }
+
+    var ss = orqDb_();
+    var sh = orqSheet_(ss, 'Contactados');
+    var days = Number(maxDays) || 30;
+    days = Math.min(Math.max(days, 1), 365);
+
+    var query = 'newer_than:' + days + 'd subject:"Mensaje desde tusclases" OR (newer_than:' + days + 'd subject:"Mensaje desde tusclasesparticulares") OR (newer_than:' + days + 'd subject:"Mensaje desde tusclases.co") OR (newer_than:' + days + 'd subject:"Mensaje desde tusclases.com.ar") OR (newer_than:' + days + 'd subject:"tusclases")';
+    var threads = orqSearchGmail_(query, 50);
+    if (threads && threads.incompleto) {
+      res.busquedaIncompleta = true;
+      res.nextPageToken = threads.nextPageToken || null;
+    }
+
+    var existingKeys = {};
+    if (sh.getLastRow() >= 2) {
+      var rows = sh.getRange(2, 1, sh.getLastRow() - 1, sh.getLastColumn()).getValues();
+      rows.forEach(function(r) {
+        var rKeys = orqTusclasesAdKeys_(String(r[2] || '') + ' ' + String(r[4] || ''));
+        rKeys.forEach(function(k) { existingKeys[k] = true; });
+      });
+    }
+
+    var newRows = [];
+    threads.forEach(function(thRaw) {
+      var th = orqHydrateGmailThread_(thRaw);
+      th.getMessages().forEach(function(m) {
+        res.mensajesRevisados++;
+        var sub = String(m.getSubject() || '');
+        if (!/Mensaje desde (?:tusclases|tusclasesparticulares)/i.test(sub)) {
+          return;
+        }
+        var plain = typeof m.getPlainBody === 'function' ? String(m.getPlainBody() || '') : '';
+        var html = typeof m.getBody === 'function' ? String(m.getBody() || '') : '';
+        var fullBody = plain + '\n' + html;
+        if (!/se ha enviado correctamente|mensaje.*enviado.*correctamente/i.test(fullBody) &&
+            !/se ha enviado correctamente|mensaje.*enviado.*correctamente/i.test(sub)) {
+          return;
+        }
+        res.comprobantesIdentificados++;
+        var targetResult = orqExtractReceiptTargetAdKey_(fullBody, sub);
+        if (targetResult.status === 'AMBIGUO_REVISION_MANUAL') {
+          res.ambiguos++;
+          return;
+        }
+        var k = targetResult.key;
+        if (!k) {
+          res.sinIdentificador++;
+          return;
+        }
+        if (existingKeys[k]) {
+          res.yaRegistrados++;
+          return;
+        }
+        existingKeys[k] = true;
+        var mDate = m.getDate();
+        var dStr = mDate instanceof Date && !isNaN(mDate.getTime()) ?
+          Utilities.formatDate(mDate, 'America/Argentina/Buenos_Aires', 'yyyy-MM-dd') :
+          Utilities.formatDate(new Date(), 'America/Argentina/Buenos_Aires', 'yyyy-MM-dd');
+
+        var domainParts = k.split(':');
+        var domain = domainParts[0];
+        var adId = domainParts[1];
+        var fallbackUrl = 'https://www.' + domain + '/alumnos/' + adId + '.aspx';
+
+        newRows.push([
+          'Alumno Tusclases (' + orqDomainToCountry_(domain) + ')',
+          'Particular',
+          fallbackUrl,
+          dStr,
+          'Comprobante automático Gmail [' + k + ']'
+        ]);
+        res.nuevosContactosIncorporados++;
+      });
+    });
+
+    if (!dryRun && newRows.length > 0) {
+      newRows.forEach(function(nr) {
+        sh.appendRow(nr);
+      });
+    }
+
+    return res;
+  } catch(e) {
+    res.ok = false;
+    res.error = e.message;
+    return res;
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+/**
+ * Función independiente para ejecución desatendida mediante Trigger programado (reloj).
+ * No depende de interfaz web ni de la presencia del usuario.
+ * Es idempotente, segura y solo opera en la planilla STAGING.
+ * NO crea triggers por sí misma; debe ser vinculada a un trigger time-driven cuando se autorice.
+ */
+function orqTriggerSyncContactReceipts(e) {
+  var lock = LockService.getScriptLock();
+  if (!lock.tryLock(15000)) {
+    console.warn('[TRIGGER SYNC] No se pudo obtener el bloqueo (otra operación en curso).');
+    return { ok: false, error: 'BLOQUEADO' };
+  }
+  try {
+    var p = PropertiesService.getScriptProperties();
+    var sheetId = p.getProperty('SHEET_ID');
+    if (sheetId !== ORQ_STAGING_ID) {
+      console.warn('[TRIGGER SYNC] Abortado: SHEET_ID no coincide con STAGING.');
+      return { ok: false, error: 'NO_STAGING' };
+    }
+
+    var res = orqSyncContactReceipts(30, false);
+    console.log('[TRIGGER SYNC] Completado:', {
+      ok: res.ok,
+      mensajesRevisados: res.mensajesRevisados,
+      comprobantesIdentificados: res.comprobantesIdentificados,
+      nuevosContactosIncorporados: res.nuevosContactosIncorporados,
+      yaRegistrados: res.yaRegistrados,
+      sinIdentificador: res.sinIdentificador
+    });
+    return res;
+  } catch (err) {
+    console.error('[TRIGGER SYNC] Error en sincronización desatendida:', err.message);
+    return { ok: false, error: err.message };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+var ORQ_INITIAL_CONTACTS_20261101 = [
+  { country: 'Colombia', domain: 'tusclases.co', id: '2466833', canonicalKey: 'tusclases.co:2466833',
+    url: 'https://www.tusclases.co/estudiantes/matematicas/solicitud-2466833.aspx', subject: 'Matemática' },
+  { country: 'Chile', domain: 'tusclasesparticulares.cl', id: '2466158', canonicalKey: 'tusclasesparticulares.cl:2466158',
+    url: 'https://www.tusclasesparticulares.cl/estudiantes/matematicas/solicitud-2466158.aspx', subject: 'Matemática' },
+  { country: 'Chile', domain: 'tusclasesparticulares.cl', id: '2466516', canonicalKey: 'tusclasesparticulares.cl:2466516',
+    url: 'https://www.tusclasesparticulares.cl/estudiantes/matematicas/solicitud-2466516.aspx', subject: 'Matemática' },
+  { country: 'Chile', domain: 'tusclasesparticulares.cl', id: '2465382', canonicalKey: 'tusclasesparticulares.cl:2465382',
+    url: 'https://www.tusclasesparticulares.cl/estudiantes/matematicas/solicitud-2465382.aspx', subject: 'Matemática' }
+];
+
+/**
+ * Consulta o siembra los 4 contactos confirmados por el usuario el 01/11/2026.
+ * Por defecto es dryRun (SOLO_LECTURA) y no escribe nada.
+ */
+function orqSeedInitialContacts(ss, dryRun) {
+  var sh = orqSheet_(ss, 'Contactados');
+  var existingKeys = {};
+  if (sh.getLastRow() >= 2) {
+    var rows = sh.getRange(2, 1, sh.getLastRow() - 1, sh.getLastColumn()).getValues();
+    rows.forEach(function(r) {
+      var rKeys = orqTusclasesAdKeys_(String(r[2] || '') + ' ' + String(r[4] || ''));
+      rKeys.forEach(function(k) { existingKeys[k] = true; });
+    });
+  }
+
+  var pending = [];
+  var alreadyInCrm = [];
+  ORQ_INITIAL_CONTACTS_20261101.forEach(function(c) {
+    if (existingKeys[c.canonicalKey]) {
+      alreadyInCrm.push(c.canonicalKey);
+    } else {
+      pending.push(c);
+    }
+  });
+
+  var report = {
+    total: ORQ_INITIAL_CONTACTS_20261101.length,
+    yaEnCRM: alreadyInCrm.length,
+    yaEnCRMDetalle: alreadyInCrm,
+    aIncorporar: pending.length,
+    aIncorporarDetalle: pending.map(function(p) { return p.canonicalKey; }),
+    modo: dryRun !== false ? 'SOLO_LECTURA' : 'ESCRITURA'
+  };
+
+  if (dryRun === false && pending.length > 0) {
+    pending.forEach(function(c) {
+      sh.appendRow([
+        'Alumno Tusclases (' + c.country + ')',
+        c.subject,
+        c.url,
+        '2026-11-01',
+        'Contacto manual confirmado por usuario (01/11/2026) [' + c.canonicalKey + ']'
+      ]);
+    });
+
+    var shPiloto = ss.getSheetByName('Piloto_Demanda_20261101');
+    if (shPiloto && shPiloto.getLastRow() >= 2) {
+      var pRows = shPiloto.getRange(2, 1, shPiloto.getLastRow() - 1, 11).getValues();
+      for (var p = 0; p < pRows.length; p++) {
+        var pUrl = String(pRows[p][3] || '');
+        var pKeys = orqTusclasesAdKeys_(pUrl);
+        if (pKeys.some(function(k) { return pending.some(function(item) { return item.canonicalKey === k; }); })) {
+          shPiloto.getRange(p + 2, 8).setValue('EXCLUIDO_CONTACTADO');
+          shPiloto.getRange(p + 2, 9).setValue('Contacto manual confirmado (01/11/2026)');
+        }
+      }
+    }
+  }
+
+  return report;
+}
+
+/**
+ * Función auxiliar sin parámetros para ejecutar la previsualización de solo lectura
+ * de los cuatro contactos confirmados desde el editor de Google Apps Script.
+ * Modo SOLO LECTURA estricto: no escribe en Google Sheets ni altera ninguna hoja.
+ */
+function orqEjecutarPrevisualizacionContactosIniciales() {
+  var res = orqSeedInitialContacts(orqDb_(), true);
+  console.log('[PREVISUALIZACION CONTACTOS INICIALES (SOLO LECTURA)]:', JSON.stringify(res, null, 2));
+  return res;
+}
+
 
 
 function orqExecuteGmail_(ss, run, source, jobCursor) {
@@ -1799,9 +2746,9 @@ function orqExecuteGmail_(ss, run, source, jobCursor) {
       // GmailThread es un objeto de servicio: al persistir ORQ_RUN como JSON pierde
       // getMessages()/getId(). No cachearlo en el estado serializado entre triggers.
       // Reconsultar una búsqueda acotada y deduplicar resultados en la planilla.
-      var threads = typeof GmailApp !== 'undefined' ? GmailApp.search(query, 0, 15) : [];
+      var threads = orqSearchGmail_(query, 15);
       if (!Array.isArray(threads)) {
-        throw new Error('GmailApp.search no devolvió una lista de conversaciones; revisar versión y adaptadores.');
+        throw new Error('Servicio de Gmail no devolvió una lista de conversaciones; revisar versión y adaptadores.');
       }
 
       threads.forEach(function(rawThread) {
@@ -2155,16 +3102,24 @@ function orqStatus() {
   // Candidatos para revisión humana
   var candidates = [];
   if (run.id && ss.getSheetByName('OrqHallazgos')) {
+    var contactHistory = orqContactHistory_(ss, { skipGmail: true });
     orqRows_(ss.getSheetByName('OrqHallazgos')).forEach(function(r) {
       if (String(r[0]) === run.id &&
           (String(r[11]) === 'REVISAR' || String(r[11]) === 'VERIFICAR_CONTACTO')) {
+        var cUrl = String(r[5] || '');
+        var cDecision = contactHistory ? orqContactDecision_(cUrl, contactHistory) : 'SIN_AUDITORIA_HISTORICA';
+        var isContacted = cDecision === 'CONTACTADO_CONFIRMADO';
+        var keys = orqTusclasesAdKeys_(cUrl);
+        var canonicalKey = keys.length ? keys[0] : '';
         candidates.push({
-          estadoContacto: String(r[11]) === 'VERIFICAR_CONTACTO' ?
-            'PENDIENTE_VERIFICAR_EN_PLATAFORMA' : 'SIN_AUDITORIA_HISTORICA',
+          estadoContacto: isContacted ? 'CONTACTADO' :
+            (String(r[11]) === 'VERIFICAR_CONTACTO' ? 'PENDIENTE_VERIFICAR_EN_PLATAFORMA' : 'SIN_AUDITORIA_HISTORICA'),
+          yaContactado: isContacted,
+          canonicalKey: canonicalKey,
           plataforma: String(r[2] || ''),
           fuente: String(r[3] || ''),
           id: String(r[4] || ''),
-          url: String(r[5] || ''),
+          url: cUrl,
           publicado: String(r[6] || ''),
           texto: String(r[7] || '').slice(0, 300),
           materia: String(r[12] || ''),
@@ -2244,6 +3199,30 @@ if (typeof module !== 'undefined') {
     orqNextPacificReset_: orqNextPacificReset_,
     orqPaceGemini_: orqPaceGemini_,
     orqSetSourceActive: orqSetSourceActive,
-    orqSTAGING_ID: ORQ_STAGING_ID
+    orqSTAGING_ID: ORQ_STAGING_ID,
+    orqTusclasesDomain_: orqTusclasesDomain_,
+    orqDomainToCountry_: orqDomainToCountry_,
+    orqTusclasesAdKeys_: orqTusclasesAdKeys_,
+    orqExtractReceiptTargetAdKey_: orqExtractReceiptTargetAdKey_,
+    orqTusclasesIds_: orqTusclasesIds_,
+    orqContactHistory_: orqContactHistory_,
+    orqContactDecision_: orqContactDecision_,
+    orqIsContacted_: orqIsContacted_,
+    orqDiagnosticoContactosSoloLectura: orqDiagnosticoContactosSoloLectura,
+    orqEjecutarDiagnosticoContactos: orqEjecutarDiagnosticoContactos,
+    orqRecordManualContact: orqRecordManualContact,
+    orqRevertManualContact: orqRevertManualContact,
+    orqSyncContactReceipts: orqSyncContactReceipts,
+    orqTriggerSyncContactReceipts: orqTriggerSyncContactReceipts,
+    orqSearchGmail_: orqSearchGmail_,
+    orqGetGmailThreadById_: orqGetGmailThreadById_,
+    orqWrapAdvancedThread_: orqWrapAdvancedThread_,
+    orqWrapAdvancedMessage_: orqWrapAdvancedMessage_,
+    orqExtractMessageBodies_: orqExtractMessageBodies_,
+    orqDecodeBase64WebSafe_: orqDecodeBase64WebSafe_,
+    orqSafeDecodeUriComponent_: orqSafeDecodeUriComponent_,
+    orqSeedInitialContacts: orqSeedInitialContacts,
+    orqEjecutarPrevisualizacionContactosIniciales: orqEjecutarPrevisualizacionContactosIniciales,
+    ORQ_INITIAL_CONTACTS_20261101: ORQ_INITIAL_CONTACTS_20261101
   };
 }

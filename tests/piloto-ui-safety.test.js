@@ -28,3 +28,28 @@ test('interfaz: muestra estado de contacto pendiente antes de permitir mensajes 
   assert.match(panel, /PENDIENTE_VERIFICAR_EN_PLATAFORMA/);
   assert.match(panel, /verificá los mensajes internos/i);
 });
+
+
+test('interfaz: la vista de anuncios manuales nunca activa una corrida ni hace scraping', () => {
+  assert.match(panel, /id="btnManualPreview"/);
+  assert.match(panel, /function handlePreviewManual\(\)/);
+  assert.match(panel, /\.orqPreviewSolicitudesVerificadas\(\)/);
+  assert.match(panel, /pilotIds = \[\];[\s\S]*?\.orqPreviewSolicitudesVerificadas\(\)/);
+  assert.match(panel, /No se verificó permiso de contacto ni elegibilidad internacional/);
+  assert.match(panel, /No se ejecutó la búsqueda/);
+});
+
+
+test('interfaz: botones de persistencia de contactos, sincronización Gmail y reversión', () => {
+  assert.match(panel, /id="btnSyncReceipts"/);
+  assert.match(panel, /function handleSyncReceipts\(\)/);
+  assert.match(panel, /\.orqSyncContactReceipts\(30, false\)/);
+  assert.match(panel, /function handleMarkContacted\(/);
+  assert.match(panel, /\.orqRecordManualContact\(/);
+  assert.match(panel, /function handleRevertContact\(/);
+  assert.match(panel, /\.orqRevertManualContact\(/);
+  assert.match(panel, /id="chkHideContacted"/);
+  assert.match(panel, /Ocultar ya contactados/);
+  assert.match(panel, /Ya contacté/);
+  assert.match(panel, /Deshacer/);
+});

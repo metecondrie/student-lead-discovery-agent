@@ -6,8 +6,8 @@
 | --- | --- |
 | Repositorio | **Público**; revisar privacidad antes de compartir información |
 | `main` | Documentación; no código de orquestación actual |
-| Rama con código candidato | `fix/auditoria-criticos-20261101` (PR #14 a PR #12; sin merge ni deploy) |
-| Pruebas locales | 159 pruebas simuladas en PR #12; PR #14 agrega nuevos casos. Comprobar CI del último HEAD; no equivale a integración real. |
+| Rama con código candidato | `feature/entrada-solicitudes-verificadas-20261101` (PR #15 a PR #14, sin merge ni deploy) |
+| Pruebas locales | **171/171 simuladas verdes** en CI `d1ed8ec` del PR #15; revalidar último HEAD, no prueba Apps Script real. |
 | Apps Script | Entorno STAGING y hojas de orquestación existentes; `/exec` y correspondencia de código **no revalidados** aquí |
 | Hojas operativas/STAGING | `SISTEMA_ACTIVO=FALSE` en ambas configuraciones leídas el 2026-11-01 |
 | Corrida de STAGING | Último estado observado en hoja: **FINALIZADO** (77 fuentes, 482 leídos, 350 clasificados, 6 solicitudes, 0 candidatos). **Script Properties y triggers no consultados**. |
@@ -16,6 +16,12 @@
 | YouTube/RSS/Gemini | Código/prototipos en ramas; permisos, cuotas y casos reales pendientes de revalidación |
 | Instagram/TikTok/Facebook | Estrategia de contenido, **no** rastreo general automatizado de terceros |
 | Contacto automático | **No autorizado** |
+
+## Piloto de demanda real (NO desplegado)
+- En STAGING se creó una entrada de **solo lectura planificada** desde la hoja `Piloto_Demanda_20261101` (8 solicitudes: 4 preseleccionadas, 3 ya contactadas, 1 sin fecha). La fuente `CAT-0240` quedó **Activo=FALSE**.
+- [PR #15](https://github.com/metecondrie/student-lead-discovery-agent/pull/15) integra lectura de la hoja, validación de anuncio y contacto previo, clasificación Gemini y `VERIFICAR_CONTACTO` sin scraping ni mensajes. [Manual de piloto](PILOTO_SOLICITUDES_VERIFICADAS_2026-11-01.md).
+- [PR #13](https://github.com/metecondrie/student-lead-discovery-agent/pull/13) incorpora una investigación adicional de **76 fuentes** sin activarlas; Reddit no tiene permiso comercial asumido para su API/RSS.
+- Apps Script HEAD, versión publicada, acceso web app y triggers siguen **sin verificar**.
 
 ## Seguridad y ramas pendientes
 - [PR #14](https://github.com/metecondrie/student-lead-discovery-agent/pull/14) contiene correcciones a las dos auditorías, sin despliegue. [Reporte](AUDITORIAS_COMPARADAS_Y_CORRECCIONES_2026-11-01.md).
